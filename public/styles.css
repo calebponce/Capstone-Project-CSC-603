@@ -187,6 +187,20 @@ button {
   letter-spacing: 0.04em;
 }
 
+button:disabled {
+  opacity: 0.62;
+  cursor: not-allowed;
+}
+
+button.secondary-btn {
+  width: auto;
+  min-width: 110px;
+  background: rgba(15, 118, 110, 0.12);
+  color: #0f4f4a;
+  border: 1px solid rgba(15, 118, 110, 0.28);
+  padding: 10px 14px;
+}
+
 .results {
   display: grid;
   gap: 20px;
@@ -217,6 +231,35 @@ button {
   background: rgba(255, 255, 255, 0.56);
 }
 
+.api-grid {
+  margin-top: 10px;
+}
+
+.api-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 7px 12px;
+  color: white;
+  font-family: "Trebuchet MS", sans-serif;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.api-badge.online {
+  background: var(--low);
+}
+
+.api-badge.offline {
+  background: var(--high);
+}
+
+.api-badge.checking {
+  background: #334155;
+}
+
 .risk-pill {
   min-width: 110px;
   text-align: center;
@@ -245,6 +288,12 @@ button {
   background: #64748b;
 }
 
+.request-meta {
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
 .schedule {
   display: grid;
   gap: 12px;
@@ -267,6 +316,69 @@ button {
 
 .schedule-item p {
   margin: 0;
+}
+
+.candidate-list {
+  display: grid;
+  gap: 10px;
+}
+
+.candidate-list.empty {
+  color: var(--muted);
+}
+
+.candidate-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.candidate-title {
+  margin: 0;
+  font-weight: 700;
+}
+
+.candidate-meta {
+  margin: 4px 0 0;
+  color: var(--muted);
+}
+
+.candidate-score {
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+  text-align: right;
+}
+
+.risk-chip {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 4px 10px;
+  color: white;
+  font-size: 0.78rem;
+  font-family: "Trebuchet MS", sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.risk-chip.low {
+  background: var(--low);
+}
+
+.risk-chip.medium {
+  background: var(--medium);
+}
+
+.risk-chip.high {
+  background: var(--high);
+}
+
+.risk-chip.neutral {
+  background: #64748b;
 }
 
 #map {
@@ -303,6 +415,15 @@ button {
   .summary-grid,
   .schedule-item {
     grid-template-columns: 1fr;
+  }
+
+  .candidate-item {
+    flex-direction: column;
+  }
+
+  .candidate-score {
+    justify-items: start;
+    text-align: left;
   }
 
   #map {

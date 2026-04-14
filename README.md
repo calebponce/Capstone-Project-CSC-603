@@ -117,6 +117,10 @@ Open your browser at:
 
 ## 📌 API Endpoints
 
+### GET /api/health
+
+Returns service health and API metadata used by the frontend connection checker.
+
 ### GET /api/config
 
 Returns configuration and supported options.
@@ -135,6 +139,9 @@ Generates a layover itinerary.
   "interests": ["food", "culture"]
 }
 ```
+
+Detailed response contracts and error shape:
+👉 [docs/api-structure.md](./docs/api-structure.md)
 
 ---
 
