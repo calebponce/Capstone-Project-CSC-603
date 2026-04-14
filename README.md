@@ -21,9 +21,13 @@ Generating a narrative itinerary grounded in real constraints
 ✨ Features
 
 🕐 Feasibility Calculator — Computes your usable time window: arrival → processing → activity → return buffer
+
 📍 Smart POI Recommendations — Suggests nearby activities filtered by your interests (food, culture, sightseeing, shopping)
+
 🗓️ Timestamped Micro-Itinerary — A clear schedule with a "return-by" deadline
+
 🟢 Risk Label — Not Recommended / Tight / Comfortable with the factors driving it
+
 🗺️ Map View — Visual display of suggested locations and routes
 
 
