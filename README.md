@@ -32,6 +32,7 @@ Generating a narrative itinerary grounded in real constraints
 
 
 🏗️ Tech Stack
+
 Frontend:
 React / Next.js
 Mapbox or Google Maps API
