@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LayoverPlus</title>
+    <link rel="preconnect" href="https://unpkg.com" />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Risk-Aware AI Micro-Itineraries</p>
+          <h1>LayoverPlus</h1>
+          <p class="lede">
+            Turn a layover into a time-bounded off-airport plan with explicit safety buffers,
+            feasibility scoring, nearby places, and a route-aware schedule.
+          </p>
+        </div>
+        <div class="hero-panel">
+          <div class="metric">
+            <span>Scoped airports</span>
+            <strong>LAX · SFO · JFK</strong>
+          </div>
+          <div class="metric">
+            <span>Week 1-3 status</span>
+            <strong>Implemented</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="layout">
+        <form id="planner-form" class="card form-card">
+          <h2>Build an itinerary</h2>
+
+          <label>
+            <span>Arrival airport</span>
+            <select id="airportCode" name="airportCode"></select>
+          </label>
+
+          <label>
+            <span>Next flight departure time</span>
+            <input id="departureTime" name="departureTime" type="datetime-local" required />
+          </label>
+
+          <label>
+            <span>Connection type</span>
+            <select id="connectionType" name="connectionType">
+              <option value="domestic">Domestic</option>
+              <option value="international">International</option>
+            </select>
+          </label>
+
+          <fieldset>
+            <legend>Interests</legend>
+            <div id="interests" class="chips"></div>
+          </fieldset>
+
+          <button type="submit">Generate layover plan</button>
+          <p id="status" class="status"></p>
+        </form>
+
+        <section class="results">
+          <div class="card summary-card">
+            <div class="summary-head">
+              <div>
+                <p class="eyebrow">Feasibility</p>
+                <h2 id="result-title">Awaiting input</h2>
+              </div>
+              <div id="risk-pill" class="risk-pill neutral">No result</div>
+            </div>
+            <div class="summary-grid">
+              <div>
+                <span>Score</span>
+                <strong id="score">-</strong>
+              </div>
+              <div>
+                <span>Layover</span>
+                <strong id="layover">-</strong>
+              </div>
+              <div>
+                <span>Processing</span>
+                <strong id="processing">-</strong>
+              </div>
+              <div>
+                <span>Return buffer</span>
+                <strong id="buffer">-</strong>
+              </div>
+            </div>
+            <p id="narrative" class="narrative"></p>
+          </div>
+
+          <div class="card">
+            <h2>Schedule</h2>
+            <div id="schedule" class="schedule empty">No itinerary yet.</div>
+          </div>
+
+          <div class="card">
+            <h2>Map view</h2>
+            <div id="map"></div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script src="/app.js"></script>
+  </body>
+  </html>

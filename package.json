@@ -1,0 +1,17 @@
+{
+  "name": "layoverplus",
+  "version": "1.0.0",
+  "description": "Risk-aware AI micro-itineraries for airport layovers",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}
