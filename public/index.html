@@ -14,7 +14,6 @@
     <link
       rel="stylesheet"
       href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
       crossorigin=""
     />
     <link rel="stylesheet" href="/styles.css" />
@@ -27,27 +26,13 @@
     <main class="page">
       <section class="hero reveal">
         <div class="hero-copy">
-          <p class="eyebrow">Risk-Aware AI Micro-Itineraries</p>
-          <h1>LayoverPlus</h1>
+          <h1>LayoverPlus ✈️ </h1>
           <p class="lede">
             Make a fast layover decision with explicit safety buffers, route-aware timing,
             and AI-assisted traveler guidance grounded in deterministic constraints.
           </p>
         </div>
-        <div class="hero-panel">
-          <div class="metric">
-            <span>Scoped airports</span>
-            <strong>LAX · SFO · JFK</strong>
-          </div>
-          <div class="metric">
-            <span>Decision mode</span>
-            <strong>Risk + Buffer First</strong>
-          </div>
-          <div class="metric">
-            <span>Output format</span>
-            <strong>Timeline · Map · Tips</strong>
-          </div>
-        </div>
+        <!-- Removed hero-panel (Scoped airports / Decision mode / Output format) -->
       </section>
 
       <section class="workspace">
@@ -63,6 +48,11 @@
             <label>
               <span>Arrival airport</span>
               <select id="airportCode" name="airportCode"></select>
+            </label>
+
+            <label>
+              <span>Arrival time</span>
+              <input id="arrivalTime" name="arrivalTime" type="datetime-local" required />
             </label>
 
             <label>
@@ -162,11 +152,7 @@
       </section>
     </main>
 
-    <script
-      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
-      crossorigin=""
-    ></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="/app.js"></script>
   </body>
-  </html>
+</html>
