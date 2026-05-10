@@ -5,6 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>LayoverPlus</title>
     <link rel="preconnect" href="https://unpkg.com" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Bitter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
     <link
       rel="stylesheet"
       href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -14,14 +20,18 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
+    <div class="ambient-shape shape-a" aria-hidden="true"></div>
+    <div class="ambient-shape shape-b" aria-hidden="true"></div>
+    <div class="ambient-grid" aria-hidden="true"></div>
+
     <main class="page">
-      <section class="hero">
+      <section class="hero reveal">
         <div class="hero-copy">
           <p class="eyebrow">Risk-Aware AI Micro-Itineraries</p>
           <h1>LayoverPlus</h1>
           <p class="lede">
-            Turn a layover into a time-bounded off-airport plan with explicit safety buffers,
-            feasibility scoring, nearby places, and a route-aware schedule.
+            Make a fast layover decision with explicit safety buffers, route-aware timing,
+            and AI-assisted traveler guidance grounded in deterministic constraints.
           </p>
         </div>
         <div class="hero-panel">
@@ -29,48 +39,82 @@
             <span>Scoped airports</span>
             <strong>LAX · SFO · JFK</strong>
           </div>
+          <div class="metric">
+            <span>Decision mode</span>
+            <strong>Risk + Buffer First</strong>
+          </div>
+          <div class="metric">
+            <span>Output format</span>
+            <strong>Timeline · Map · Tips</strong>
+          </div>
         </div>
       </section>
 
-      <section class="layout">
-        <form id="planner-form" class="card form-card">
-          <h2>Build an itinerary</h2>
+      <section class="workspace">
+        <aside class="card planner reveal">
+          <form id="planner-form" class="form-card">
+            <p class="eyebrow">Planner</p>
+            <h2>Build an itinerary</h2>
+            <p class="form-intro">
+              Enter your connection details and generate a safe off-airport window with clear
+              risk tradeoffs.
+            </p>
 
-          <label>
-            <span>Arrival airport</span>
-            <select id="airportCode" name="airportCode"></select>
-          </label>
+            <label>
+              <span>Arrival airport</span>
+              <select id="airportCode" name="airportCode"></select>
+            </label>
 
-          <label>
-            <span>Next flight departure time</span>
-            <input id="departureTime" name="departureTime" type="datetime-local" required />
-          </label>
+            <label>
+              <span>Next flight departure time</span>
+              <input id="departureTime" name="departureTime" type="datetime-local" required />
+            </label>
 
-          <label>
-            <span>Connection type</span>
-            <select id="connectionType" name="connectionType">
-              <option value="domestic">Domestic</option>
-              <option value="international">International</option>
-            </select>
-          </label>
+            <label>
+              <span>Connection type</span>
+              <select id="connectionType" name="connectionType">
+                <option value="domestic">Domestic</option>
+                <option value="international">International</option>
+              </select>
+            </label>
 
-          <fieldset>
-            <legend>Interests</legend>
-            <div id="interests" class="chips"></div>
-          </fieldset>
+            <fieldset>
+              <legend>Interests</legend>
+              <div id="interests" class="chips"></div>
+            </fieldset>
 
-          <button type="submit">Generate layover plan</button>
-          <p id="status" class="status"></p>
-        </form>
+            <button type="submit">Generate layover plan</button>
+            <p id="status" class="status" aria-live="polite"></p>
+          </form>
+
+          <section class="api-health checking" aria-live="polite">
+            <p class="eyebrow">API status</p>
+            <div class="api-line">
+              <strong id="api-state">Checking backend...</strong>
+              <span id="api-latency">-</span>
+            </div>
+            <p id="api-meta" class="api-meta"></p>
+          </section>
+        </aside>
 
         <section class="results">
-          <div class="card summary-card">
+          <article class="card summary-card reveal">
             <div class="summary-head">
               <div>
-                <p class="eyebrow">Feasibility</p>
+                <p class="eyebrow">Primary recommendation</p>
                 <h2 id="result-title">Awaiting input</h2>
               </div>
               <div id="risk-pill" class="risk-pill neutral">No result</div>
+            </div>
+            <p id="narrative" class="narrative"></p>
+            <div id="ai-details" class="ai-details hidden"></div>
+            <p id="request-meta" class="request-meta"></p>
+          </article>
+
+          <article class="card reveal">
+            <div class="summary-head">
+              <h2>Trip snapshot</h2>
+              <span class="eyebrow">At-a-glance constraints</span>
             </div>
             <div class="summary-grid">
               <div>
@@ -89,26 +133,31 @@
                 <span>Return buffer</span>
                 <strong id="buffer">-</strong>
               </div>
+              <div>
+                <span>Slack</span>
+                <strong id="slack">-</strong>
+              </div>
+              <div>
+                <span>AI output</span>
+                <strong id="ai-provider">-</strong>
+              </div>
             </div>
-            <p id="narrative" class="narrative"></p>
-            <div id="ai-details" class="ai-details hidden"></div>
-            <p id="request-meta" class="request-meta"></p>
-          </div>
+          </article>
 
-          <div class="card">
-            <h2>Schedule</h2>
-            <div id="schedule" class="schedule empty">No itinerary yet.</div>
-          </div>
+          <article class="card reveal">
+            <h2>Timeline</h2>
+            <div id="schedule" class="timeline empty">No itinerary yet.</div>
+          </article>
 
-          <div class="card">
+          <article class="card reveal">
             <h2>Nearby alternatives</h2>
             <div id="candidates" class="candidate-list empty">Generate a plan to compare candidate POIs.</div>
-          </div>
+          </article>
 
-          <div class="card">
+          <article class="card reveal">
             <h2>Map view</h2>
             <div id="map"></div>
-          </div>
+          </article>
         </section>
       </section>
     </main>
