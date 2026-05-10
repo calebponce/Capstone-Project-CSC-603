@@ -48,7 +48,7 @@ app.get("/api/config", (_req, res) => {
 
 app.post("/api/plan", async (req, res) => {
   try {
-    const { airportCode, departureTime, connectionType, interests } = req.body || {};
+    const { airportCode, arrivalTime, departureTime, connectionType, interests } = req.body || {};
 
     if (!airportCode || !departureTime || !connectionType) {
       return sendError(
@@ -76,12 +76,21 @@ app.post("/api/plan", async (req, res) => {
       return sendError(res, 400, "departureTime must be in the future.");
     }
 
+    const arrivalDate = arrivalTime ? new Date(arrivalTime) : new Date();
+    if (Number.isNaN(arrivalDate.getTime())) {
+      return sendError(res, 400, "arrivalTime must be a valid date/time.");
+    }
+    if (arrivalDate.getTime() >= departureDate.getTime()) {
+      return sendError(res, 400, "arrivalTime must be before departureTime.");
+    }
+
     const normalizedInterests = Array.isArray(interests)
       ? interests.filter((item) => INTEREST_CONFIG[item])
       : [];
 
     const result = await buildLayoverPlan({
       airport,
+      arrivalTime: arrivalDate,
       departureTime: departureDate,
       connectionType,
       interests: normalizedInterests,

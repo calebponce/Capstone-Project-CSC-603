@@ -32,7 +32,14 @@
             and AI-assisted traveler guidance grounded in deterministic constraints.
           </p>
         </div>
-        <!-- Removed hero-panel (Scoped airports / Decision mode / Output format) -->
+        <div class="hero-panel">
+          <button id="toggle-presentation" type="button" class="secondary-action">Presentation mode: Off</button>
+          <p class="field-hint">Use presentation mode for class demos and cleaner storytelling.</p>
+          <div class="metric">
+            <span>Did You Know?</span>
+            <strong id="travel-fact">Layover plans are strongest when your return buffer stays untouched.</strong>
+          </div>
+        </div>
       </section>
 
       <section class="workspace">
@@ -59,6 +66,7 @@
               <span>Next flight departure time</span>
               <input id="departureTime" name="departureTime" type="datetime-local" required />
             </label>
+            <p id="layover-window" class="field-hint">Layover window: -</p>
 
             <div class="quick-time">
               <span class="mini-label">Quick layover presets</span>
@@ -150,6 +158,11 @@
             <p id="narrative" class="narrative"></p>
             <div id="ai-details" class="ai-details hidden"></div>
             <p id="request-meta" class="request-meta"></p>
+            <div id="next-step" class="next-step">
+              <p class="mini-label">Next recommended step</p>
+              <p id="next-step-text">Generate a plan to get a recommendation.</p>
+              <button id="next-step-btn" type="button" class="secondary-action">Generate plan</button>
+            </div>
             <div class="action-row">
               <button id="copy-brief" type="button" class="secondary-action">Copy brief</button>
               <button id="export-plan" type="button" class="secondary-action">Export JSON</button>

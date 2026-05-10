@@ -30,6 +30,14 @@ const plannerChecklistEl = document.getElementById("planner-checklist");
 const selectedPoiEl = document.getElementById("selected-poi");
 const confidenceFillEl = document.getElementById("confidence-fill");
 const confidenceLabelEl = document.getElementById("confidence-label");
+const arrivalInput = document.getElementById("arrivalTime");
+const departureInput = document.getElementById("departureTime");
+const layoverWindowEl = document.getElementById("layover-window");
+const togglePresentationBtn = document.getElementById("toggle-presentation");
+const travelFactEl = document.getElementById("travel-fact");
+const nextStepWrapEl = document.getElementById("next-step");
+const nextStepTextEl = document.getElementById("next-step-text");
+const nextStepBtn = document.getElementById("next-step-btn");
 const presetButtons = Array.from(document.querySelectorAll(".preset-btn"));
 const scenarioButtons = Array.from(document.querySelectorAll(".scenario-btn"));
 const tabButtons = Array.from(document.querySelectorAll(".tab-btn"));
@@ -46,7 +54,9 @@ let candidateMarkers = [];
 let lastCandidates = [];
 let selectedCandidateIndex = -1;
 let lastPlanData = null;
+let lastRequestPayload = null;
 let activeTab = "decision";
+let presentationModeEnabled = false;
 
 const SCENARIOS = {
   "food-sfo": {
@@ -98,19 +108,173 @@ function formatMinutes(minutes) {
   return `${minutes} min`;
 }
 
+function formatDuration(minutes) {
+  if (!Number.isFinite(minutes)) {
+    return "-";
+  }
+  const safeMinutes = Math.max(0, Math.round(minutes));
+  const hours = Math.floor(safeMinutes / 60);
+  const mins = safeMinutes % 60;
+  if (hours <= 0) {
+    return `${mins}m`;
+  }
+  if (mins === 0) {
+    return `${hours}h`;
+  }
+  return `${hours}h ${mins}m`;
+}
+
+function toDatetimeLocalValue(date) {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 16);
+}
+
+function setDefaultArrivalTime() {
+  const now = new Date();
+  now.setSeconds(0, 0);
+  const remainder = now.getMinutes() % 15;
+  if (remainder !== 0) {
+    now.setMinutes(now.getMinutes() + (15 - remainder));
+  }
+  arrivalInput.value = toDatetimeLocalValue(now);
+}
+
+function getValidArrivalBaseTime() {
+  const arrivalDate = new Date(arrivalInput.value);
+  if (!Number.isNaN(arrivalDate.getTime())) {
+    return arrivalDate;
+  }
+  return new Date();
+}
+
 function setDepartureTimeFromHours(hoursAhead) {
-  const input = document.getElementById("departureTime");
-  const later = new Date(Date.now() + hoursAhead * 60 * 60 * 1000);
-  later.setMinutes(0, 0, 0);
-  input.value = `${later.getFullYear()}-${String(later.getMonth() + 1).padStart(2, "0")}-${String(
-    later.getDate()
-  ).padStart(2, "0")}T${String(later.getHours()).padStart(2, "0")}:${String(
-    later.getMinutes()
-  ).padStart(2, "0")}`;
+  const base = getValidArrivalBaseTime();
+  const later = new Date(base.getTime() + hoursAhead * 60 * 60 * 1000);
+  later.setSeconds(0, 0);
+  const remainder = later.getMinutes() % 15;
+  if (remainder !== 0) {
+    later.setMinutes(later.getMinutes() + (15 - remainder));
+  }
+  departureInput.value = toDatetimeLocalValue(later);
 }
 
 function setDefaultDepartureTime() {
   setDepartureTimeFromHours(5);
+}
+
+function getTimeWindow() {
+  const arrivalDate = new Date(arrivalInput.value);
+  const departureDate = new Date(departureInput.value);
+  const hasArrival = !Number.isNaN(arrivalDate.getTime());
+  const hasDeparture = !Number.isNaN(departureDate.getTime());
+  const layoverMinutes = hasArrival && hasDeparture
+    ? Math.round((departureDate.getTime() - arrivalDate.getTime()) / 60000)
+    : null;
+
+  return {
+    arrivalDate,
+    departureDate,
+    hasArrival,
+    hasDeparture,
+    layoverMinutes,
+  };
+}
+
+function updateLayoverWindowHint() {
+  if (!layoverWindowEl) {
+    return;
+  }
+
+  const { hasArrival, hasDeparture, layoverMinutes } = getTimeWindow();
+  layoverWindowEl.classList.remove("warn", "good");
+  if (!hasArrival || !hasDeparture) {
+    layoverWindowEl.textContent = "Layover window: choose arrival and departure.";
+    layoverWindowEl.classList.add("warn");
+    return;
+  }
+  if (layoverMinutes <= 0) {
+    layoverWindowEl.textContent = "Layover window: departure must be after arrival.";
+    layoverWindowEl.classList.add("warn");
+    return;
+  }
+  layoverWindowEl.textContent = `Layover window: ${layoverMinutes} min (${formatDuration(layoverMinutes)}).`;
+  layoverWindowEl.classList.add("good");
+}
+
+function setPresentationMode(enabled) {
+  presentationModeEnabled = enabled;
+  document.body.classList.toggle("presentation-mode", presentationModeEnabled);
+  if (togglePresentationBtn) {
+    togglePresentationBtn.setAttribute("aria-pressed", String(presentationModeEnabled));
+    togglePresentationBtn.textContent = `Presentation mode: ${presentationModeEnabled ? "On" : "Off"}`;
+  }
+}
+
+function setTravelFact(message) {
+  if (!travelFactEl) {
+    return;
+  }
+  travelFactEl.textContent = message;
+}
+
+function updateTravelFact(data = null) {
+  if (data?.feasibility?.riskLabel) {
+    const risk = data.feasibility.riskLabel;
+    if (risk === "Low") {
+      setTravelFact("Low-risk plans protect return buffer while still creating meaningful off-airport time.");
+      return;
+    }
+    if (risk === "Medium") {
+      setTravelFact("Medium-risk plans can work, but every transfer minute should stay on track.");
+      return;
+    }
+    setTravelFact("High-risk plans usually mean in-airport is the safer choice for this connection.");
+    return;
+  }
+
+  const { layoverMinutes } = getTimeWindow();
+  if (!Number.isFinite(layoverMinutes)) {
+    setTravelFact("Add arrival and departure times to size your real layover window.");
+    return;
+  }
+  if (layoverMinutes <= 180) {
+    setTravelFact("Tighter windows under 3 hours often favor quick options near the airport.");
+    return;
+  }
+  if (layoverMinutes <= 360) {
+    setTravelFact("Mid-range layovers work best when outbound travel stays short and predictable.");
+    return;
+  }
+  setTravelFact("Longer layovers can support richer stops if your return buffer still stays protected.");
+}
+
+function runNextStepAction() {
+  const action = nextStepBtn?.dataset.action || "submit";
+  if (action === "submit") {
+    form.requestSubmit();
+    return;
+  }
+  if (action === "copy") {
+    copyPlanBrief().catch(() => {
+      setStatus("Could not copy the plan brief.", "error");
+    });
+    return;
+  }
+  if (["decision", "timeline", "alternatives", "map"].includes(action)) {
+    setActiveTab(action);
+    resultsTopEl.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+}
+
+function setNextStep({ text, label, action, tone = "neutral" }) {
+  if (!nextStepWrapEl || !nextStepTextEl || !nextStepBtn) {
+    return;
+  }
+
+  nextStepWrapEl.className = `next-step ${tone}`;
+  nextStepTextEl.textContent = text;
+  nextStepBtn.textContent = label;
+  nextStepBtn.dataset.action = action;
 }
 
 function setStatus(message, type = "info") {
@@ -157,19 +321,22 @@ function setActivePreset(hours) {
 }
 
 function updatePlannerChecklist() {
-  const departureValue = form.elements.departureTime.value;
+  const { arrivalDate, hasArrival, hasDeparture, layoverMinutes } = getTimeWindow();
   const connectionType = form.elements.connectionType.value;
   const selectedInterests = form.querySelectorAll("input[name='interests']:checked").length;
-  const departureDate = new Date(departureValue);
-  const layoverMinutes = Number.isNaN(departureDate.getTime())
-    ? null
-    : Math.round((departureDate.getTime() - Date.now()) / 60000);
+  const minutesUntilArrival = hasArrival ? Math.round((arrivalDate.getTime() - Date.now()) / 60000) : null;
 
-  const layoverLine = layoverMinutes == null
+  const layoverLine = !hasArrival || !hasDeparture
     ? "Layover window not set yet."
     : layoverMinutes > 0
-      ? `Estimated layover window: ${layoverMinutes} min.`
-      : "Departure time must be in the future.";
+      ? `Estimated layover window: ${layoverMinutes} min (${formatDuration(layoverMinutes)}).`
+      : "Departure must be after arrival.";
+
+  const timingLine = !hasArrival
+    ? "Arrival time is missing."
+    : minutesUntilArrival > 0
+      ? `Arrival starts in about ${minutesUntilArrival} min.`
+      : "Arrival is now or in the past.";
 
   const connectionLine = connectionType === "international"
     ? "International selected: stricter processing and return assumptions apply."
@@ -179,9 +346,12 @@ function updatePlannerChecklist() {
     ? `${selectedInterests} interest${selectedInterests > 1 ? "s" : ""} selected.`
     : "No interests selected; default categories will be used.";
 
-  plannerChecklistEl.innerHTML = [layoverLine, connectionLine, interestLine]
+  plannerChecklistEl.innerHTML = [layoverLine, timingLine, connectionLine, interestLine]
     .map((line) => `<li>${escapeHtml(line)}</li>`)
     .join("");
+
+  updateLayoverWindowHint();
+  updateTravelFact();
 }
 
 function applyScenario(scenarioKey) {
@@ -192,6 +362,7 @@ function applyScenario(scenarioKey) {
 
   form.elements.airportCode.value = scenario.airportCode;
   form.elements.connectionType.value = scenario.connectionType;
+  setDefaultArrivalTime();
   setDepartureTimeFromHours(scenario.hoursAhead);
   setActivePreset(scenario.hoursAhead);
 
@@ -219,6 +390,11 @@ function resetResultsView() {
   aiDetailsEl.className = "ai-details hidden";
   aiDetailsEl.innerHTML = "";
   requestMetaEl.textContent = "";
+  setNextStep({
+    text: "Generate a plan to get a recommendation.",
+    label: "Generate plan",
+    action: "submit",
+  });
 
   scoreEl.textContent = "-";
   confidenceLabelEl.textContent = "-";
@@ -240,6 +416,7 @@ function resetResultsView() {
   candidatesEl.textContent = "Generate a plan to compare candidate POIs.";
 
   lastPlanData = null;
+  lastRequestPayload = null;
   lastCandidates = [];
   selectedCandidateIndex = -1;
   candidateMarkers = [];
@@ -253,6 +430,7 @@ function resetResultsView() {
   }
 
   setActiveTab("decision");
+  updateTravelFact();
 }
 
 function initMap() {
@@ -628,20 +806,27 @@ function focusCandidate(index) {
 }
 
 function buildPlanBrief(data) {
+  const arrivalValue = lastRequestPayload?.arrivalTime || data.request?.arrivalTime;
   const recommendation = data.map?.selectedPoi
     ? `${data.map.selectedPoi.name} (${data.map.selectedPoi.category || "poi"})`
     : `Stay at ${data.airport.code}`;
-  return [
+  const lines = [
     "LayoverPlus Plan Brief",
     `Airport: ${data.request.airportCode}`,
     `Connection: ${data.request.connectionType}`,
+  ];
+  if (arrivalValue) {
+    lines.push(`Arrival: ${formatDateTime(arrivalValue)}`);
+  }
+  lines.push(
     `Departure: ${formatDateTime(data.request.departureTime)}`,
     `Risk: ${data.feasibility.riskLabel}`,
     `Score: ${data.feasibility.score}/100`,
     `Slack: ${formatMinutes(data.feasibility.slackMinutes)}`,
     `Recommendation: ${recommendation}`,
-    `Narrative: ${data.narrative}`,
-  ].join("\n");
+    `Narrative: ${data.narrative}`
+  );
+  return lines.join("\n");
 }
 
 async function copyPlanBrief() {
@@ -678,12 +863,45 @@ function exportPlanJson() {
   setStatus("Plan JSON exported.", "success");
 }
 
-function updateSummary(data) {
+function setNextStepFromPlan(data) {
+  const risk = data.feasibility?.riskLabel || "Unknown";
+  if (risk === "Low") {
+    setNextStep({
+      text: "Route looks healthy. Confirm the map path and then copy your brief.",
+      label: "Open map",
+      action: "map",
+      tone: "good",
+    });
+    return;
+  }
+  if (risk === "Medium") {
+    setNextStep({
+      text: "This is feasible but tight. Review timeline transitions before committing.",
+      label: "Review timeline",
+      action: "timeline",
+      tone: "warn",
+    });
+    return;
+  }
+  setNextStep({
+    text: "Risk is high. Compare alternatives or keep this layover inside the airport.",
+    label: "View alternatives",
+    action: "alternatives",
+    tone: "danger",
+  });
+}
+
+function updateSummary(data, payload = null) {
   lastPlanData = data;
+  if (payload) {
+    lastRequestPayload = payload;
+  }
   setPlanActionState(true);
   renderDecisionBanner(data);
   renderDecisionWhy(data);
   renderScoreBreakdown(data);
+  setNextStepFromPlan(data);
+  updateTravelFact(data);
   const aiTitle = data.ai?.title && data.ai.title.trim();
   resultTitle.textContent = aiTitle || (data.map.selectedPoi ? data.map.selectedPoi.name : `Stay at ${data.airport.code}`);
   riskPill.textContent = `${data.feasibility.riskLabel} Risk`;
@@ -703,8 +921,16 @@ function updateSummary(data) {
   planUpdatedEl.textContent = `Updated ${formatDateTime(new Date())}`;
   narrativeEl.textContent = data.narrative;
   renderAiDetails(data.ai || {});
-  requestMetaEl.textContent =
-    `Request: ${data.request.airportCode} · ${data.request.connectionType} · Departure ${formatDateTime(data.request.departureTime)}`;
+  const requestSegments = [
+    `Request: ${data.request.airportCode}`,
+    data.request.connectionType,
+  ];
+  const arrivalValue = lastRequestPayload?.arrivalTime || data.request?.arrivalTime;
+  if (arrivalValue) {
+    requestSegments.push(`Arrival ${formatDateTime(arrivalValue)}`);
+  }
+  requestSegments.push(`Departure ${formatDateTime(data.request.departureTime)}`);
+  requestMetaEl.textContent = requestSegments.join(" · ");
 
   renderSafetyChecklist(data);
   renderSchedule(data.schedule || []);
@@ -744,11 +970,19 @@ async function loadConfig() {
 
 function getPayloadFromForm() {
   const formData = new FormData(form);
+  const arrivalValue = formData.get("arrivalTime");
   const departureValue = formData.get("departureTime");
+  const arrivalDate = new Date(arrivalValue);
   const departureDate = new Date(departureValue);
 
+  if (!arrivalValue || Number.isNaN(arrivalDate.getTime())) {
+    throw new Error("Choose a valid arrival time.");
+  }
   if (!departureValue || Number.isNaN(departureDate.getTime())) {
     throw new Error("Choose a valid departure time.");
+  }
+  if (departureDate.getTime() <= arrivalDate.getTime()) {
+    throw new Error("Departure must be after arrival.");
   }
   if (departureDate.getTime() <= Date.now()) {
     throw new Error("Departure time must be in the future.");
@@ -756,6 +990,7 @@ function getPayloadFromForm() {
 
   return {
     airportCode: formData.get("airportCode"),
+    arrivalTime: arrivalValue,
     departureTime: departureValue,
     connectionType: formData.get("connectionType"),
     interests: formData.getAll("interests"),
@@ -770,6 +1005,7 @@ form.addEventListener("submit", async (event) => {
 
   try {
     const payload = getPayloadFromForm();
+    lastRequestPayload = payload;
     const apiOnline = await checkApiHealth();
     if (!apiOnline) {
       throw new Error("API is unavailable. Restart the server and retry.");
@@ -786,7 +1022,7 @@ form.addEventListener("submit", async (event) => {
       throw new Error(data.error || "Unknown error");
     }
 
-    updateSummary(data);
+    updateSummary(data, payload);
     resultsTopEl.scrollIntoView({ behavior: "smooth", block: "start" });
     setStatus("Plan generated.", "success");
   } catch (error) {
@@ -798,6 +1034,7 @@ form.addEventListener("submit", async (event) => {
 });
 
 resetPlannerBtn.addEventListener("click", () => {
+  setDefaultArrivalTime();
   setDefaultDepartureTime();
   setActivePreset(5);
   form.elements.connectionType.value = "domestic";
@@ -819,6 +1056,18 @@ copyBriefBtn.addEventListener("click", () => {
 exportPlanBtn.addEventListener("click", () => {
   exportPlanJson();
 });
+
+if (togglePresentationBtn) {
+  togglePresentationBtn.addEventListener("click", () => {
+    setPresentationMode(!presentationModeEnabled);
+  });
+}
+
+if (nextStepBtn) {
+  nextStepBtn.addEventListener("click", () => {
+    runNextStepAction();
+  });
+}
 
 candidatesEl.addEventListener("click", (event) => {
   const candidateButton = event.target.closest(".candidate-item");
@@ -883,11 +1132,17 @@ form.addEventListener("change", () => {
   updatePlannerChecklist();
 });
 
+form.addEventListener("input", () => {
+  updatePlannerChecklist();
+});
+
+setDefaultArrivalTime();
 setDefaultDepartureTime();
 setActivePreset(5);
 updatePlannerChecklist();
 initMap();
 setActiveTab(activeTab);
+setPresentationMode(false);
 resetResultsView();
 Promise.all([checkApiHealth(), loadConfig()]).catch((error) => {
   setStatus(`Failed to load configuration: ${error.message}`, "error");

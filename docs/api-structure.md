@@ -43,6 +43,7 @@ Request body:
 ```json
 {
   "airportCode": "SFO",
+  "arrivalTime": "2026-04-14T14:30",
   "departureTime": "2026-04-14T20:30",
   "connectionType": "domestic",
   "interests": ["food", "culture"]
@@ -52,6 +53,8 @@ Request body:
 Validation rules:
 
 - `airportCode`, `departureTime`, and `connectionType` are required.
+- `arrivalTime` is optional; if omitted, the server uses current time.
+- If provided, `arrivalTime` must be valid and strictly before `departureTime`.
 - `airportCode` must be one of the supported airport codes.
 - `connectionType` must be `domestic` or `international`.
 - `departureTime` must parse as a valid date and be in the future.

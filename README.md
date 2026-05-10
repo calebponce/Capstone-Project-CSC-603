@@ -69,7 +69,7 @@ Travelers often remain in the airport during layovers because they cannot reliab
 
 ## ✨ Features
 
-* Input fields for **airport, departure time, connection type, and interests**
+* Input fields for **airport, arrival time, departure time, connection type, and interests**
 * Airport-specific **processing assumptions and safety buffers**
 * **Feasibility scoring** with `Low`, `Medium`, and `High` risk labels
 * Nearby POI search using **OpenStreetMap Overpass**
@@ -82,7 +82,7 @@ Travelers often remain in the airport during layovers because they cannot reliab
 
 ## 📖 Usage
 
-1. Enter your **arrival airport** and **next flight departure time**
+1. Enter your **arrival airport, arrival time, and next flight departure time**
 2. Select your **connection type** (domestic / international)
 3. Choose your **interests** (food, culture, sightseeing, shopping)
 4. Receive:
@@ -152,6 +152,7 @@ Generates a layover itinerary.
 ```json
 {
   "airportCode": "SFO",
+  "arrivalTime": "2026-04-14T14:30",
   "departureTime": "2026-04-14T20:30",
   "connectionType": "domestic",
   "interests": ["food", "culture"]

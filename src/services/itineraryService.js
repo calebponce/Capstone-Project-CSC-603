@@ -72,9 +72,9 @@ function buildSchedule({ airport, departureTime, option }) {
   ];
 }
 
-async function buildLayoverPlan({ airport, departureTime, connectionType, interests }) {
-  const now = new Date();
-  const layoverMinutes = minutesBetween(now, departureTime);
+async function buildLayoverPlan({ airport, arrivalTime, departureTime, connectionType, interests }) {
+  const planStartTime = arrivalTime instanceof Date ? arrivalTime : new Date();
+  const layoverMinutes = minutesBetween(planStartTime, departureTime);
 
   const processingMinutes = airport.processingMinutes[connectionType];
   const returnBufferMinutes = airport.returnBufferMinutes[connectionType];
@@ -128,7 +128,7 @@ async function buildLayoverPlan({ airport, departureTime, connectionType, intere
       inboundMinutes,
       dwellMinutes,
       returnBufferMinutes,
-      planStartTime: now,
+      planStartTime,
       feasibility,
     });
   }
@@ -195,6 +195,7 @@ async function buildLayoverPlan({ airport, departureTime, connectionType, intere
       airportCode: airport.code,
       connectionType,
       interests: effectiveInterests,
+      arrivalTime: planStartTime.toISOString(),
       departureTime: departureTime.toISOString(),
     },
     airport,
