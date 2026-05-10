@@ -3,9 +3,16 @@ const interestsContainer = document.getElementById("interests");
 const form = document.getElementById("planner-form");
 const statusEl = document.getElementById("status");
 const submitButton = form.querySelector("button[type='submit']");
+const resetPlannerBtn = document.getElementById("reset-planner");
+const copyBriefBtn = document.getElementById("copy-brief");
+const exportPlanBtn = document.getElementById("export-plan");
+const resultsTopEl = document.getElementById("results-top");
 
 const resultTitle = document.getElementById("result-title");
 const riskPill = document.getElementById("risk-pill");
+const goNoGoEl = document.getElementById("go-no-go");
+const decisionWhyEl = document.getElementById("decision-why");
+const scoreBreakdownEl = document.getElementById("score-breakdown");
 const scoreEl = document.getElementById("score");
 const layoverEl = document.getElementById("layover");
 const processingEl = document.getElementById("processing");
@@ -15,8 +22,18 @@ const aiProviderEl = document.getElementById("ai-provider");
 const narrativeEl = document.getElementById("narrative");
 const aiDetailsEl = document.getElementById("ai-details");
 const requestMetaEl = document.getElementById("request-meta");
+const planUpdatedEl = document.getElementById("plan-updated");
 const scheduleEl = document.getElementById("schedule");
 const candidatesEl = document.getElementById("candidates");
+const safetyChecklistEl = document.getElementById("safety-checklist");
+const plannerChecklistEl = document.getElementById("planner-checklist");
+const selectedPoiEl = document.getElementById("selected-poi");
+const confidenceFillEl = document.getElementById("confidence-fill");
+const confidenceLabelEl = document.getElementById("confidence-label");
+const presetButtons = Array.from(document.querySelectorAll(".preset-btn"));
+const scenarioButtons = Array.from(document.querySelectorAll(".scenario-btn"));
+const tabButtons = Array.from(document.querySelectorAll(".tab-btn"));
+const tabPanels = Array.from(document.querySelectorAll(".tab-panel"));
 
 const apiHealthCard = document.querySelector(".api-health");
 const apiStateEl = document.getElementById("api-state");
@@ -25,6 +42,32 @@ const apiMetaEl = document.getElementById("api-meta");
 
 let map;
 let layerGroup;
+let candidateMarkers = [];
+let lastCandidates = [];
+let selectedCandidateIndex = -1;
+let lastPlanData = null;
+let activeTab = "decision";
+
+const SCENARIOS = {
+  "food-sfo": {
+    airportCode: "SFO",
+    connectionType: "domestic",
+    hoursAhead: 5,
+    interests: ["food", "shopping"],
+  },
+  "culture-jfk": {
+    airportCode: "JFK",
+    connectionType: "domestic",
+    hoursAhead: 6,
+    interests: ["culture", "sightseeing"],
+  },
+  "scenic-lax": {
+    airportCode: "LAX",
+    connectionType: "international",
+    hoursAhead: 8,
+    interests: ["sightseeing", "food"],
+  },
+};
 
 function escapeHtml(value) {
   return String(value)
@@ -55,15 +98,161 @@ function formatMinutes(minutes) {
   return `${minutes} min`;
 }
 
-function setDefaultDepartureTime() {
+function setDepartureTimeFromHours(hoursAhead) {
   const input = document.getElementById("departureTime");
-  const later = new Date(Date.now() + 5 * 60 * 60 * 1000);
+  const later = new Date(Date.now() + hoursAhead * 60 * 60 * 1000);
   later.setMinutes(0, 0, 0);
   input.value = `${later.getFullYear()}-${String(later.getMonth() + 1).padStart(2, "0")}-${String(
     later.getDate()
   ).padStart(2, "0")}T${String(later.getHours()).padStart(2, "0")}:${String(
     later.getMinutes()
   ).padStart(2, "0")}`;
+}
+
+function setDefaultDepartureTime() {
+  setDepartureTimeFromHours(5);
+}
+
+function setStatus(message, type = "info") {
+  statusEl.textContent = message;
+  statusEl.className = `status ${type}`;
+}
+
+function setPlanActionState(enabled) {
+  copyBriefBtn.disabled = !enabled;
+  exportPlanBtn.disabled = !enabled;
+}
+
+function setActiveTab(tab) {
+  activeTab = tab;
+  for (const button of tabButtons) {
+    const isActive = button.dataset.tab === tab;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-selected", String(isActive));
+  }
+
+  for (const panel of tabPanels) {
+    const isActive = panel.dataset.tabPanel === tab;
+    panel.classList.toggle("active", isActive);
+  }
+}
+
+function setLoadingState(isLoading) {
+  document.body.classList.toggle("is-loading", isLoading);
+}
+
+function setActivePreset(hours) {
+  let hasMatch = false;
+  presetButtons.forEach((button) => {
+    const buttonHours = Number(button.dataset.hours);
+    const isActive = buttonHours === hours;
+    button.classList.toggle("active", isActive);
+    if (isActive) {
+      hasMatch = true;
+    }
+  });
+  if (!hasMatch) {
+    presetButtons.forEach((button) => button.classList.remove("active"));
+  }
+}
+
+function updatePlannerChecklist() {
+  const departureValue = form.elements.departureTime.value;
+  const connectionType = form.elements.connectionType.value;
+  const selectedInterests = form.querySelectorAll("input[name='interests']:checked").length;
+  const departureDate = new Date(departureValue);
+  const layoverMinutes = Number.isNaN(departureDate.getTime())
+    ? null
+    : Math.round((departureDate.getTime() - Date.now()) / 60000);
+
+  const layoverLine = layoverMinutes == null
+    ? "Layover window not set yet."
+    : layoverMinutes > 0
+      ? `Estimated layover window: ${layoverMinutes} min.`
+      : "Departure time must be in the future.";
+
+  const connectionLine = connectionType === "international"
+    ? "International selected: stricter processing and return assumptions apply."
+    : "Domestic selected: moderate processing assumptions apply.";
+
+  const interestLine = selectedInterests > 0
+    ? `${selectedInterests} interest${selectedInterests > 1 ? "s" : ""} selected.`
+    : "No interests selected; default categories will be used.";
+
+  plannerChecklistEl.innerHTML = [layoverLine, connectionLine, interestLine]
+    .map((line) => `<li>${escapeHtml(line)}</li>`)
+    .join("");
+}
+
+function applyScenario(scenarioKey) {
+  const scenario = SCENARIOS[scenarioKey];
+  if (!scenario) {
+    return;
+  }
+
+  form.elements.airportCode.value = scenario.airportCode;
+  form.elements.connectionType.value = scenario.connectionType;
+  setDepartureTimeFromHours(scenario.hoursAhead);
+  setActivePreset(scenario.hoursAhead);
+
+  const selectedInterests = new Set(scenario.interests);
+  for (const checkbox of form.querySelectorAll("input[name='interests']")) {
+    checkbox.checked = selectedInterests.has(checkbox.value);
+  }
+
+  updatePlannerChecklist();
+  setStatus(`Loaded scenario: ${scenarioKey.replace("-", " ")}`, "info");
+}
+
+function resetResultsView() {
+  resultTitle.textContent = "Awaiting input";
+  riskPill.textContent = "No result";
+  riskPill.className = "risk-pill neutral";
+  goNoGoEl.textContent = "Awaiting recommendation";
+  goNoGoEl.className = "decision-banner neutral";
+  planUpdatedEl.textContent = "No plan generated yet.";
+  decisionWhyEl.className = "decision-why";
+  decisionWhyEl.innerHTML = "<p>Generate a plan to see why this recommendation was made.</p>";
+  scoreBreakdownEl.className = "breakdown-list";
+  scoreBreakdownEl.innerHTML = "<p>Generate a plan to view score components.</p>";
+  narrativeEl.textContent = "";
+  aiDetailsEl.className = "ai-details hidden";
+  aiDetailsEl.innerHTML = "";
+  requestMetaEl.textContent = "";
+
+  scoreEl.textContent = "-";
+  confidenceLabelEl.textContent = "-";
+  confidenceFillEl.style.width = "0%";
+  layoverEl.textContent = "-";
+  processingEl.textContent = "-";
+  bufferEl.textContent = "-";
+  slackEl.textContent = "-";
+  aiProviderEl.textContent = "-";
+
+  safetyChecklistEl.className = "safety-list";
+  safetyChecklistEl.innerHTML = "<p>Generate a plan to evaluate safety checks.</p>";
+  selectedPoiEl.className = "poi-card empty";
+  selectedPoiEl.textContent = "Generate a plan to see selected POI details.";
+
+  scheduleEl.className = "timeline empty";
+  scheduleEl.textContent = "No itinerary yet.";
+  candidatesEl.className = "candidate-list empty";
+  candidatesEl.textContent = "Generate a plan to compare candidate POIs.";
+
+  lastPlanData = null;
+  lastCandidates = [];
+  selectedCandidateIndex = -1;
+  candidateMarkers = [];
+  setPlanActionState(false);
+
+  if (layerGroup) {
+    layerGroup.clearLayers();
+  }
+  if (map) {
+    map.setView([39.5, -98.35], 4);
+  }
+
+  setActiveTab("decision");
 }
 
 function initMap() {
@@ -142,6 +331,146 @@ function renderSchedule(schedule) {
     .join("");
 }
 
+function renderDecisionBanner(data) {
+  const risk = data.feasibility?.riskLabel;
+  const feasible = Boolean(data.feasibility?.feasible);
+  if (!feasible) {
+    goNoGoEl.textContent = "No-Go: Stay inside the airport for this layover.";
+    goNoGoEl.className = "decision-banner no-go";
+    return;
+  }
+
+  if (risk === "Low") {
+    goNoGoEl.textContent = "Go: A safe off-airport window is available.";
+    goNoGoEl.className = "decision-banner go";
+    return;
+  }
+
+  if (risk === "Medium") {
+    goNoGoEl.textContent = "Caution: Feasible, but the schedule is tight.";
+    goNoGoEl.className = "decision-banner caution";
+    return;
+  }
+
+  goNoGoEl.textContent = "No-Go: Keep this layover in-airport.";
+  goNoGoEl.className = "decision-banner no-go";
+}
+
+function renderDecisionWhy(data) {
+  const selectedPoi = data.map?.selectedPoi;
+  const maxTravel = data.airport?.maxTravelMinutesOneWay?.[data.request?.connectionType] ?? null;
+  const outbound = selectedPoi?.outboundMinutes ?? null;
+  const slack = data.feasibility?.slackMinutes ?? null;
+  const score = data.feasibility?.score ?? null;
+
+  const travelLine = outbound == null || maxTravel == null
+    ? "No off-airport travel selected."
+    : outbound <= maxTravel
+      ? `Travel time fits target (${outbound} min vs ${maxTravel} min target).`
+      : `Travel time exceeds target (${outbound} min vs ${maxTravel} min target).`;
+
+  const items = [
+    score == null ? "Score unavailable." : `Confidence score is ${score}/100.`,
+    slack == null ? "Slack is unavailable." : `Return slack is ${formatMinutes(slack)}.`,
+    travelLine,
+  ];
+
+  decisionWhyEl.className = "decision-why";
+  decisionWhyEl.innerHTML = items
+    .map((text) => `<p>${escapeHtml(text)}</p>`)
+    .join("");
+}
+
+function renderScoreBreakdown(data) {
+  const slack = data.feasibility?.slackMinutes ?? -1;
+  const selectedPoi = data.map?.selectedPoi;
+  const outbound = selectedPoi?.outboundMinutes ?? 0;
+  const inbound = selectedPoi?.inboundMinutes ?? 0;
+  const dwell = selectedPoi?.dwellMinutes ?? 0;
+  const maxTravel = data.airport?.maxTravelMinutesOneWay?.[data.request?.connectionType] ?? 0;
+  const oneWay = Math.max(outbound, inbound);
+
+  const slackPoints = slack >= 45 ? 55 : slack >= 20 ? 40 : slack >= 0 ? 20 : 0;
+  const travelPoints = oneWay <= maxTravel ? 25 : oneWay <= maxTravel + 8 ? 10 : 0;
+  const dwellPoints = dwell >= 45 ? 20 : dwell >= 30 ? 10 : 0;
+
+  const rows = [
+    { label: "Time slack", points: slackPoints, max: 55 },
+    { label: "Travel distance", points: travelPoints, max: 25 },
+    { label: "Activity quality", points: dwellPoints, max: 20 },
+  ];
+
+  scoreBreakdownEl.className = "breakdown-list";
+  scoreBreakdownEl.innerHTML = rows
+    .map((row) => {
+      const width = Math.round((row.points / row.max) * 100);
+      return `
+        <article class="breakdown-row">
+          <div class="breakdown-head">
+            <span>${escapeHtml(row.label)}</span>
+            <strong>${row.points}/${row.max}</strong>
+          </div>
+          <div class="breakdown-track">
+            <div class="breakdown-fill" style="width:${width}%"></div>
+          </div>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function buildSafetyChecks(data) {
+  const slack = data.feasibility?.slackMinutes ?? -1;
+  const score = data.feasibility?.score ?? 0;
+  const returnBuffer = data.summary?.returnBufferMinutes ?? 0;
+  const selectedPoi = data.map?.selectedPoi;
+  const aiUsed = Boolean(data.ai?.used);
+
+  return [
+    {
+      label: "Feasibility score is strong",
+      passed: score >= 70,
+      detail: `Current score: ${score}/100`,
+    },
+    {
+      label: "Return slack is healthy",
+      passed: slack >= 30,
+      detail: `Current slack: ${formatMinutes(slack)}`,
+    },
+    {
+      label: "Buffer is preserved",
+      passed: returnBuffer >= 60,
+      detail: `Return buffer: ${formatMinutes(returnBuffer)}`,
+    },
+    {
+      label: "An off-airport stop is selected",
+      passed: Boolean(selectedPoi),
+      detail: selectedPoi ? `Selected: ${selectedPoi.name}` : "No selected POI",
+    },
+    {
+      label: "Narrative source available",
+      passed: aiUsed || Boolean(data.ai),
+      detail: aiUsed ? "AI generated guidance." : "Fallback deterministic guidance.",
+    },
+  ];
+}
+
+function renderSafetyChecklist(data) {
+  const checks = buildSafetyChecks(data);
+  safetyChecklistEl.className = "safety-list";
+  safetyChecklistEl.innerHTML = checks
+    .map((check) => {
+      const stateClass = check.passed ? "pass" : "warn";
+      return `
+        <article class="safety-item ${stateClass}">
+          <p><strong>${escapeHtml(check.label)}</strong></p>
+          <p>${escapeHtml(check.detail)}</p>
+        </article>
+      `;
+    })
+    .join("");
+}
+
 function renderAiDetails(ai) {
   const provider = ai?.provider || "fallback";
   const model = ai?.model ? ` (${ai.model})` : "";
@@ -166,10 +495,17 @@ function renderAiDetails(ai) {
 }
 
 function renderCandidates(candidates) {
+  lastCandidates = candidates;
+
   if (!candidates.length) {
     candidatesEl.className = "candidate-list empty";
     candidatesEl.textContent = "No nearby candidates found for this request.";
+    selectedCandidateIndex = -1;
     return;
+  }
+
+  if (selectedCandidateIndex >= candidates.length) {
+    selectedCandidateIndex = -1;
   }
 
   candidatesEl.className = "candidate-list";
@@ -177,7 +513,7 @@ function renderCandidates(candidates) {
     .map((candidate, index) => {
       const riskClass = candidate.riskLabel ? candidate.riskLabel.toLowerCase() : "neutral";
       return `
-        <article class="candidate-item">
+        <button type="button" class="candidate-item ${selectedCandidateIndex === index ? "active" : ""}" data-index="${index}">
           <div>
             <p class="candidate-title">${index + 1}. ${escapeHtml(candidate.name)}</p>
             <p class="candidate-meta">${escapeHtml(candidate.category || "poi")}</p>
@@ -186,14 +522,50 @@ function renderCandidates(candidates) {
             <span>${escapeHtml(String(candidate.score ?? "-"))}/100</span>
             <span class="risk-chip ${riskClass}">${escapeHtml(candidate.riskLabel || "Unknown")}</span>
           </div>
-        </article>
+        </button>
       `;
     })
     .join("");
 }
 
+function renderSelectedPoi(selectedPoi) {
+  if (!selectedPoi) {
+    selectedPoiEl.className = "poi-card empty";
+    selectedPoiEl.textContent = "No off-airport stop selected for this layover.";
+    return;
+  }
+
+  selectedPoiEl.className = "poi-card";
+  selectedPoiEl.innerHTML = `
+    <div class="poi-head">
+      <h3>${escapeHtml(selectedPoi.name)}</h3>
+      <span class="poi-tag">${escapeHtml(selectedPoi.category || "poi")}</span>
+    </div>
+    <div class="poi-meta-grid">
+      <div>
+        <span>Outbound</span>
+        <strong>${escapeHtml(formatMinutes(selectedPoi.outboundMinutes))}</strong>
+      </div>
+      <div>
+        <span>Inbound</span>
+        <strong>${escapeHtml(formatMinutes(selectedPoi.inboundMinutes))}</strong>
+      </div>
+      <div>
+        <span>Dwell</span>
+        <strong>${escapeHtml(formatMinutes(selectedPoi.dwellMinutes))}</strong>
+      </div>
+    </div>
+    <p class="poi-address">${escapeHtml(selectedPoi.address || "Address unavailable from source data.")}</p>
+  `;
+}
+
 function renderMap(mapData) {
   layerGroup.clearLayers();
+  candidateMarkers = [];
+
+  if (!mapData?.airport) {
+    return;
+  }
 
   const points = [];
   const airportMarker = L.marker([mapData.airport.lat, mapData.airport.lon]).bindPopup(
@@ -202,7 +574,7 @@ function renderMap(mapData) {
   airportMarker.addTo(layerGroup);
   points.push([mapData.airport.lat, mapData.airport.lon]);
 
-  mapData.candidates.forEach((candidate) => {
+  (mapData.candidates || []).forEach((candidate) => {
     const marker = L.circleMarker([candidate.lat, candidate.lon], {
       radius: 7,
       color:
@@ -216,6 +588,7 @@ function renderMap(mapData) {
       `<strong>${escapeHtml(candidate.name)}</strong><br />${escapeHtml(candidate.category || "poi")}<br />Score: ${escapeHtml(candidate.score ?? "-")}`
     );
     marker.addTo(layerGroup);
+    candidateMarkers.push(marker);
     points.push([candidate.lat, candidate.lon]);
   });
 
@@ -241,13 +614,84 @@ function renderMap(mapData) {
   }
 }
 
+function focusCandidate(index) {
+  const marker = candidateMarkers[index];
+  const candidate = lastCandidates[index];
+  if (!marker || !candidate) {
+    return;
+  }
+  selectedCandidateIndex = index;
+  renderCandidates(lastCandidates);
+  const latLng = marker.getLatLng();
+  map.setView(latLng, Math.max(map.getZoom(), 12), { animate: true });
+  marker.openPopup();
+}
+
+function buildPlanBrief(data) {
+  const recommendation = data.map?.selectedPoi
+    ? `${data.map.selectedPoi.name} (${data.map.selectedPoi.category || "poi"})`
+    : `Stay at ${data.airport.code}`;
+  return [
+    "LayoverPlus Plan Brief",
+    `Airport: ${data.request.airportCode}`,
+    `Connection: ${data.request.connectionType}`,
+    `Departure: ${formatDateTime(data.request.departureTime)}`,
+    `Risk: ${data.feasibility.riskLabel}`,
+    `Score: ${data.feasibility.score}/100`,
+    `Slack: ${formatMinutes(data.feasibility.slackMinutes)}`,
+    `Recommendation: ${recommendation}`,
+    `Narrative: ${data.narrative}`,
+  ].join("\n");
+}
+
+async function copyPlanBrief() {
+  if (!lastPlanData) {
+    setStatus("Generate a plan before copying a brief.", "error");
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(buildPlanBrief(lastPlanData));
+    setStatus("Plan brief copied to clipboard.", "success");
+  } catch (_error) {
+    setStatus("Clipboard write failed. Copy manually from the summary card.", "error");
+  }
+}
+
+function exportPlanJson() {
+  if (!lastPlanData) {
+    setStatus("Generate a plan before exporting.", "error");
+    return;
+  }
+
+  const blob = new Blob([JSON.stringify(lastPlanData, null, 2)], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  const timestamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
+  link.href = url;
+  link.download = `layoverplus-plan-${lastPlanData.request.airportCode}-${timestamp}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  setStatus("Plan JSON exported.", "success");
+}
+
 function updateSummary(data) {
+  lastPlanData = data;
+  setPlanActionState(true);
+  renderDecisionBanner(data);
+  renderDecisionWhy(data);
+  renderScoreBreakdown(data);
   const aiTitle = data.ai?.title && data.ai.title.trim();
   resultTitle.textContent = aiTitle || (data.map.selectedPoi ? data.map.selectedPoi.name : `Stay at ${data.airport.code}`);
   riskPill.textContent = `${data.feasibility.riskLabel} Risk`;
   riskPill.className = `risk-pill ${data.feasibility.riskLabel.toLowerCase()}`;
 
   scoreEl.textContent = `${data.feasibility.score}/100`;
+  confidenceLabelEl.textContent = `${data.feasibility.score}/100`;
+  confidenceFillEl.style.width = `${Math.max(0, Math.min(100, data.feasibility.score))}%`;
   layoverEl.textContent = formatMinutes(data.summary.layoverMinutes);
   processingEl.textContent = formatMinutes(data.summary.processingMinutes);
   bufferEl.textContent = formatMinutes(data.summary.returnBufferMinutes);
@@ -256,14 +700,23 @@ function updateSummary(data) {
     ? `${data.ai.provider}${data.ai.model ? ` · ${data.ai.model}` : ""}`
     : "Fallback";
 
+  planUpdatedEl.textContent = `Updated ${formatDateTime(new Date())}`;
   narrativeEl.textContent = data.narrative;
   renderAiDetails(data.ai || {});
   requestMetaEl.textContent =
     `Request: ${data.request.airportCode} · ${data.request.connectionType} · Departure ${formatDateTime(data.request.departureTime)}`;
 
+  renderSafetyChecklist(data);
   renderSchedule(data.schedule || []);
+  renderSelectedPoi(data.map?.selectedPoi || null);
   renderCandidates(data.map?.candidates || []);
   renderMap(data.map);
+
+  selectedCandidateIndex = data.map?.candidates?.length ? 0 : -1;
+  if (selectedCandidateIndex === 0) {
+    renderCandidates(data.map.candidates);
+  }
+  setActiveTab("decision");
 }
 
 async function loadConfig() {
@@ -311,8 +764,9 @@ function getPayloadFromForm() {
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
-  statusEl.textContent = "Building plan...";
+  setStatus("Building plan...", "info");
   submitButton.disabled = true;
+  setLoadingState(true);
 
   try {
     const payload = getPayloadFromForm();
@@ -333,16 +787,112 @@ form.addEventListener("submit", async (event) => {
     }
 
     updateSummary(data);
-    statusEl.textContent = "Plan generated.";
+    resultsTopEl.scrollIntoView({ behavior: "smooth", block: "start" });
+    setStatus("Plan generated.", "success");
   } catch (error) {
-    statusEl.textContent = error.message;
+    setStatus(error.message, "error");
   } finally {
     submitButton.disabled = false;
+    setLoadingState(false);
   }
 });
 
-setDefaultDepartureTime();
-initMap();
-Promise.all([checkApiHealth(), loadConfig()]).catch((error) => {
-  statusEl.textContent = `Failed to load configuration: ${error.message}`;
+resetPlannerBtn.addEventListener("click", () => {
+  setDefaultDepartureTime();
+  setActivePreset(5);
+  form.elements.connectionType.value = "domestic";
+  const interests = Array.from(form.querySelectorAll("input[name='interests']"));
+  interests.forEach((checkbox, index) => {
+    checkbox.checked = index < 2;
+  });
+  updatePlannerChecklist();
+  resetResultsView();
+  setStatus("Planner reset.", "info");
 });
+
+copyBriefBtn.addEventListener("click", () => {
+  copyPlanBrief().catch(() => {
+    setStatus("Could not copy the plan brief.", "error");
+  });
+});
+
+exportPlanBtn.addEventListener("click", () => {
+  exportPlanJson();
+});
+
+candidatesEl.addEventListener("click", (event) => {
+  const candidateButton = event.target.closest(".candidate-item");
+  if (!candidateButton || !candidateButton.dataset.index) {
+    return;
+  }
+  const index = Number(candidateButton.dataset.index);
+  if (!Number.isFinite(index)) {
+    return;
+  }
+  focusCandidate(index);
+});
+
+for (const button of tabButtons) {
+  button.addEventListener("click", () => {
+    const tab = button.dataset.tab;
+    if (!tab) {
+      return;
+    }
+    setActiveTab(tab);
+  });
+  button.addEventListener("keydown", (event) => {
+    if (!["ArrowRight", "ArrowLeft"].includes(event.key)) {
+      return;
+    }
+    event.preventDefault();
+    const currentIndex = tabButtons.indexOf(button);
+    const offset = event.key === "ArrowRight" ? 1 : -1;
+    const nextIndex = (currentIndex + offset + tabButtons.length) % tabButtons.length;
+    const nextButton = tabButtons[nextIndex];
+    nextButton.focus();
+    const tab = nextButton.dataset.tab;
+    if (tab) {
+      setActiveTab(tab);
+    }
+  });
+}
+
+for (const button of presetButtons) {
+  button.addEventListener("click", () => {
+    const hours = Number(button.dataset.hours);
+    if (!Number.isFinite(hours)) {
+      return;
+    }
+    setDepartureTimeFromHours(hours);
+    setActivePreset(hours);
+    updatePlannerChecklist();
+  });
+}
+
+for (const button of scenarioButtons) {
+  button.addEventListener("click", () => {
+    const scenarioKey = button.dataset.scenario;
+    if (!scenarioKey) {
+      return;
+    }
+    applyScenario(scenarioKey);
+  });
+}
+
+form.addEventListener("change", () => {
+  updatePlannerChecklist();
+});
+
+setDefaultDepartureTime();
+setActivePreset(5);
+updatePlannerChecklist();
+initMap();
+setActiveTab(activeTab);
+resetResultsView();
+Promise.all([checkApiHealth(), loadConfig()]).catch((error) => {
+  setStatus(`Failed to load configuration: ${error.message}`, "error");
+});
+
+setInterval(() => {
+  checkApiHealth().catch(() => {});
+}, 60000);

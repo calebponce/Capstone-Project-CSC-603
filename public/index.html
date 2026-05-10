@@ -60,6 +60,15 @@
               <input id="departureTime" name="departureTime" type="datetime-local" required />
             </label>
 
+            <div class="quick-time">
+              <span class="mini-label">Quick layover presets</span>
+              <div class="preset-row" role="group" aria-label="Quick departure presets">
+                <button type="button" class="preset-btn" data-hours="3">+3 hours</button>
+                <button type="button" class="preset-btn" data-hours="5">+5 hours</button>
+                <button type="button" class="preset-btn" data-hours="8">+8 hours</button>
+              </div>
+            </div>
+
             <label>
               <span>Connection type</span>
               <select id="connectionType" name="connectionType">
@@ -67,15 +76,46 @@
                 <option value="international">International</option>
               </select>
             </label>
+            <p class="field-hint">International connections apply stricter safety and return assumptions.</p>
 
             <fieldset>
               <legend>Interests</legend>
               <div id="interests" class="chips"></div>
             </fieldset>
 
-            <button type="submit">Generate layover plan</button>
+            <section class="scenario-block">
+              <p class="mini-label">Try a sample scenario</p>
+              <div class="scenario-grid">
+                <button type="button" class="scenario-btn" data-scenario="food-sfo">
+                  <strong>Food Sprint</strong>
+                  <span>SFO · Domestic · +5h</span>
+                </button>
+                <button type="button" class="scenario-btn" data-scenario="culture-jfk">
+                  <strong>Culture Stop</strong>
+                  <span>JFK · Domestic · +6h</span>
+                </button>
+                <button type="button" class="scenario-btn" data-scenario="scenic-lax">
+                  <strong>Scenic Window</strong>
+                  <span>LAX · International · +8h</span>
+                </button>
+              </div>
+            </section>
+
+            <div class="action-row">
+              <button type="submit">Generate layover plan</button>
+              <button id="reset-planner" type="button" class="secondary-action">Reset planner</button>
+            </div>
             <p id="status" class="status" aria-live="polite"></p>
           </form>
+
+          <section class="planner-notes">
+            <p class="mini-label">Planner reminders</p>
+            <ul id="planner-checklist">
+              <li>Use a future departure time.</li>
+              <li>Keep return buffer untouched.</li>
+              <li>If confidence is low, stay in-airport.</li>
+            </ul>
+          </section>
 
           <section class="api-health checking" aria-live="polite">
             <p class="eyebrow">API status</p>
@@ -87,7 +127,7 @@
           </section>
         </aside>
 
-        <section class="results">
+        <section id="results-top" class="results">
           <article class="card summary-card reveal">
             <div class="summary-head">
               <div>
@@ -96,15 +136,46 @@
               </div>
               <div id="risk-pill" class="risk-pill neutral">No result</div>
             </div>
+            <p id="go-no-go" class="decision-banner neutral">Awaiting recommendation</p>
+            <p id="plan-updated" class="summary-updated">No plan generated yet.</p>
+            <div id="decision-why" class="decision-why">
+              <p>Generate a plan to see why this recommendation was made.</p>
+            </div>
+            <div class="score-explain">
+              <p class="mini-label">Score breakdown</p>
+              <div id="score-breakdown" class="breakdown-list">
+                <p>Generate a plan to view score components.</p>
+              </div>
+            </div>
             <p id="narrative" class="narrative"></p>
             <div id="ai-details" class="ai-details hidden"></div>
             <p id="request-meta" class="request-meta"></p>
+            <div class="action-row">
+              <button id="copy-brief" type="button" class="secondary-action">Copy brief</button>
+              <button id="export-plan" type="button" class="secondary-action">Export JSON</button>
+            </div>
           </article>
 
-          <article class="card reveal">
+          <nav class="result-tabs reveal" role="tablist" aria-label="Result sections">
+            <button type="button" class="tab-btn active" role="tab" aria-selected="true" data-tab="decision">Decision</button>
+            <button type="button" class="tab-btn" role="tab" aria-selected="false" data-tab="timeline">Timeline</button>
+            <button type="button" class="tab-btn" role="tab" aria-selected="false" data-tab="alternatives">Alternatives</button>
+            <button type="button" class="tab-btn" role="tab" aria-selected="false" data-tab="map">Map</button>
+          </nav>
+
+          <article class="card reveal tab-panel active" data-tab-panel="decision">
             <div class="summary-head">
               <h2>Trip snapshot</h2>
               <span class="eyebrow">At-a-glance constraints</span>
+            </div>
+            <div class="confidence">
+              <div class="confidence-line">
+                <span class="mini-label">Confidence score</span>
+                <strong id="confidence-label">-</strong>
+              </div>
+              <div class="confidence-track">
+                <div id="confidence-fill" class="confidence-fill"></div>
+              </div>
             </div>
             <div class="summary-grid">
               <div>
@@ -116,15 +187,15 @@
                 <strong id="layover">-</strong>
               </div>
               <div>
-                <span>Processing</span>
+                <span>Processing <abbr class="tip" title="Estimated time to clear airport processing after arrival.">?</abbr></span>
                 <strong id="processing">-</strong>
               </div>
               <div>
-                <span>Return buffer</span>
+                <span>Return buffer <abbr class="tip" title="Safety time reserved before departure for re-entry, security, and boarding.">?</abbr></span>
                 <strong id="buffer">-</strong>
               </div>
               <div>
-                <span>Slack</span>
+                <span>Slack <abbr class="tip" title="Remaining minutes after all processing, travel, activity, and return buffer.">?</abbr></span>
                 <strong id="slack">-</strong>
               </div>
               <div>
@@ -134,19 +205,37 @@
             </div>
           </article>
 
-          <article class="card reveal">
+          <article class="card reveal tab-panel active" data-tab-panel="decision">
+            <h2>Safety checklist</h2>
+            <div id="safety-checklist" class="safety-list">
+              <p>Generate a plan to evaluate safety checks.</p>
+            </div>
+          </article>
+
+          <article class="card reveal tab-panel active" data-tab-panel="decision">
+            <h2>Selected stop details</h2>
+            <div id="selected-poi" class="poi-card empty">Generate a plan to see selected POI details.</div>
+          </article>
+
+          <article class="card reveal tab-panel" data-tab-panel="timeline">
             <h2>Timeline</h2>
             <div id="schedule" class="timeline empty">No itinerary yet.</div>
           </article>
 
-          <article class="card reveal">
+          <article class="card reveal tab-panel" data-tab-panel="alternatives">
             <h2>Nearby alternatives</h2>
+            <p class="field-hint">Click any candidate to focus it on the map.</p>
             <div id="candidates" class="candidate-list empty">Generate a plan to compare candidate POIs.</div>
           </article>
 
-          <article class="card reveal">
+          <article class="card reveal tab-panel" data-tab-panel="map">
             <h2>Map view</h2>
             <div id="map"></div>
+            <div class="map-legend">
+              <span><i class="dot low"></i>Low risk</span>
+              <span><i class="dot medium"></i>Medium risk</span>
+              <span><i class="dot high"></i>High risk</span>
+            </div>
           </article>
         </section>
       </section>
