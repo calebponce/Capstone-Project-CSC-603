@@ -29,10 +29,6 @@
             <span>Scoped airports</span>
             <strong>LAX · SFO · JFK</strong>
           </div>
-          <div class="metric">
-            <span>Week 1-3 status</span>
-            <strong>Implemented</strong>
-          </div>
         </div>
       </section>
 
@@ -68,35 +64,6 @@
         </form>
 
         <section class="results">
-          <div class="card api-card">
-            <div class="summary-head">
-              <div>
-                <p class="eyebrow">API Connection</p>
-                <h2 id="api-title">Backend status</h2>
-              </div>
-              <button id="refresh-api" type="button" class="secondary-btn">Recheck</button>
-            </div>
-            <div class="summary-grid api-grid">
-              <div>
-                <span>Status</span>
-                <strong id="api-status">Checking...</strong>
-              </div>
-              <div>
-                <span>Latency</span>
-                <strong id="api-latency">-</strong>
-              </div>
-              <div>
-                <span>Last check</span>
-                <strong id="api-last-check">-</strong>
-              </div>
-              <div>
-                <span>Server clock</span>
-                <strong id="api-server-time">-</strong>
-              </div>
-            </div>
-            <p id="api-message" class="status"></p>
-          </div>
-
           <div class="card summary-card">
             <div class="summary-head">
               <div>
@@ -124,6 +91,7 @@
               </div>
             </div>
             <p id="narrative" class="narrative"></p>
+            <div id="ai-details" class="ai-details hidden"></div>
             <p id="request-meta" class="request-meta"></p>
           </div>
 

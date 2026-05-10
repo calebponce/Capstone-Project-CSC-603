@@ -1,3 +1,4 @@
+const { loadEnvFile } = require("./src/config/env");
 const express = require("express");
 const path = require("path");
 const pkg = require("./package.json");
@@ -7,6 +8,8 @@ const {
   getAirportConfig,
 } = require("./src/config/airports");
 const { buildLayoverPlan } = require("./src/services/itineraryService");
+
+loadEnvFile();
 
 const app = express();
 const port = process.env.PORT || 3000;

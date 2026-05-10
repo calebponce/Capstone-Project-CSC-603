@@ -45,24 +45,25 @@ Travelers often remain in the airport during layovers because they cannot reliab
 
 ### Frontend
 
-* React / Next.js
-* Mapbox or Google Maps API
+* Vanilla HTML/CSS/JavaScript prototype
+* Leaflet map UI
 
 ### Backend
 
-* Python + FastAPI
+* Node.js + Express
 * Time calculations & feasibility logic
 
 ### AI Component
 
-* Pre-trained LLM (API-based)
-* Generates itinerary descriptions from structured data
+* OpenAI Responses API integration
+* Generates itinerary wording, explanations, and traveler tips from structured data
+* Deterministic backend logic still owns safety constraints, travel-time estimates, and risk scoring
 
 ### Data Sources
 
-* Flight schedules / airport metadata
-* Travel time APIs
-* Places / POI APIs
+* Static airport metadata
+* OSRM routing estimates
+* OpenStreetMap Overpass POI search
 
 ---
 
@@ -113,6 +114,23 @@ npm start
 Open your browser at:
 👉 http://localhost:3000
 
+### Enable AI Generation
+
+Create a local `.env` file in the project root:
+
+```bash
+OPENAI_API_KEY=your_api_key_here
+OPENAI_MODEL=gpt-4.1-mini
+```
+
+Then restart the server:
+
+```bash
+npm start
+```
+
+Without `OPENAI_API_KEY`, the app still works but uses fallback wording instead of AI-generated schedule text.
+
 ---
 
 ## 📌 API Endpoints
@@ -142,6 +160,21 @@ Generates a layover itinerary.
 
 Detailed response contracts and error shape:
 👉 [docs/api-structure.md](./docs/api-structure.md)
+
+The plan response also includes AI metadata:
+
+```json
+{
+  "ai": {
+    "provider": "openai",
+    "model": "gpt-4.1-mini",
+    "used": true,
+    "title": "Low-risk SFO food stop",
+    "travelerTips": [],
+    "error": null
+  }
+}
+```
 
 ---
 

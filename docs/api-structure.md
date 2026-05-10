@@ -36,7 +36,7 @@ Response shape:
 ```
 
 ### `POST /api/plan`
-Builds a layover itinerary with feasibility, schedule, and map candidates.
+Builds a layover itinerary with feasibility, AI-generated wording, schedule, and map candidates.
 
 Request body:
 
@@ -69,11 +69,30 @@ Success response:
   "airport": {},
   "feasibility": {},
   "summary": {},
-  "schedule": [],
+  "schedule": [
+    {
+      "label": "string",
+      "start": "2:15 PM",
+      "end": "2:45 PM",
+      "minutes": 30,
+      "location": "string",
+      "reason": "Optional AI-generated explanation"
+    }
+  ],
   "narrative": "string",
+  "ai": {
+    "provider": "openai",
+    "model": "gpt-4.1-mini",
+    "used": true,
+    "title": "string",
+    "travelerTips": [],
+    "error": null
+  },
   "map": {}
 }
 ```
+
+If `OPENAI_API_KEY` is not configured or the OpenAI request fails, `ai.used` is `false`, `ai.provider` is `fallback`, and the deterministic fallback schedule/narrative are returned.
 
 ## Error Contract
 

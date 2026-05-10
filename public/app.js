@@ -11,17 +11,10 @@ const layoverEl = document.getElementById("layover");
 const processingEl = document.getElementById("processing");
 const bufferEl = document.getElementById("buffer");
 const narrativeEl = document.getElementById("narrative");
+const aiDetailsEl = document.getElementById("ai-details");
 const requestMetaEl = document.getElementById("request-meta");
 const scheduleEl = document.getElementById("schedule");
 const candidatesEl = document.getElementById("candidates");
-
-const apiTitleEl = document.getElementById("api-title");
-const apiStatusEl = document.getElementById("api-status");
-const apiLatencyEl = document.getElementById("api-latency");
-const apiLastCheckEl = document.getElementById("api-last-check");
-const apiServerTimeEl = document.getElementById("api-server-time");
-const apiMessageEl = document.getElementById("api-message");
-const refreshApiButton = document.getElementById("refresh-api");
 
 let map;
 let layerGroup;
@@ -88,12 +81,31 @@ function renderSchedule(schedule) {
       return `
         <article class="schedule-item">
           <p><strong>${escapeHtml(item.start)}</strong> to <strong>${escapeHtml(item.end)}</strong></p>
-          <p>${escapeHtml(item.label)}<br /><span>${escapeHtml(item.location)}</span></p>
+          <p>
+            ${escapeHtml(item.label)}<br />
+            <span>${escapeHtml(item.location)}</span>
+            ${item.reason ? `<small>${escapeHtml(item.reason)}</small>` : ""}
+          </p>
           <p><strong>${escapeHtml(formatMinutes(item.minutes))}</strong></p>
         </article>
       `;
     })
     .join("");
+}
+
+function renderAiDetails(ai) {
+  const tips = Array.isArray(ai?.travelerTips) ? ai.travelerTips : [];
+  if (!tips.length) {
+    aiDetailsEl.className = "ai-details hidden";
+    aiDetailsEl.innerHTML = "";
+    return;
+  }
+
+  aiDetailsEl.className = "ai-details";
+  aiDetailsEl.innerHTML = `
+    <div class="tips-title">Traveler tips</div>
+    <ul>${tips.map((tip) => `<li>${escapeHtml(tip)}</li>`).join("")}</ul>
+  `;
 }
 
 function renderCandidates(candidates) {
@@ -172,56 +184,6 @@ function renderMap(mapData) {
   }
 }
 
-function setApiStatus({
-  state = "checking",
-  latency = "-",
-  lastCheck = "-",
-  serverTime = "-",
-  message = "",
-} = {}) {
-  apiStatusEl.textContent = state === "online" ? "Online" : state === "offline" ? "Offline" : "Checking...";
-  apiStatusEl.className = `api-badge ${state}`;
-  apiTitleEl.textContent =
-    state === "online" ? "Backend reachable" : state === "offline" ? "Backend unreachable" : "Backend status";
-  apiLatencyEl.textContent = latency;
-  apiLastCheckEl.textContent = lastCheck;
-  apiServerTimeEl.textContent = serverTime;
-  apiMessageEl.textContent = message;
-}
-
-async function checkApiHealth() {
-  setApiStatus({ state: "checking", message: "Running API health check..." });
-  const startedAt = performance.now();
-
-  try {
-    const response = await fetch("/api/health", { cache: "no-store" });
-    const latencyMs = Math.round(performance.now() - startedAt);
-    const data = await response.json();
-
-    if (!response.ok || data.status !== "ok") {
-      throw new Error(data.error || "Health endpoint returned a non-ok status.");
-    }
-
-    setApiStatus({
-      state: "online",
-      latency: `${latencyMs} ms`,
-      lastCheck: formatDateTime(new Date()),
-      serverTime: formatDateTime(data.timestamp),
-      message: `Uptime ${Math.round((data.uptimeSeconds || 0) / 60)} minutes · v${data.version || "unknown"}`,
-    });
-    return true;
-  } catch (error) {
-    setApiStatus({
-      state: "offline",
-      latency: "-",
-      lastCheck: formatDateTime(new Date()),
-      serverTime: "-",
-      message: error.message || "Could not reach API",
-    });
-    return false;
-  }
-}
-
 function updateSummary(data) {
   resultTitle.textContent = data.map.selectedPoi
     ? data.map.selectedPoi.name
@@ -233,6 +195,7 @@ function updateSummary(data) {
   processingEl.textContent = `${data.summary.processingMinutes} min`;
   bufferEl.textContent = `${data.summary.returnBufferMinutes} min`;
   narrativeEl.textContent = data.narrative;
+  renderAiDetails(data.ai);
   requestMetaEl.textContent =
     `Request: ${data.request.airportCode} · ${data.request.connectionType} · Departure ${formatDateTime(data.request.departureTime)}`;
   renderSchedule(data.schedule);
@@ -291,10 +254,6 @@ form.addEventListener("submit", async (event) => {
 
   try {
     const payload = getPayloadFromForm();
-    const apiReachable = await checkApiHealth();
-    if (!apiReachable) {
-      throw new Error("API is not reachable. Start/restart the server and retry.");
-    }
 
     const response = await fetch("/api/plan", {
       method: "POST",
@@ -316,12 +275,8 @@ form.addEventListener("submit", async (event) => {
   }
 });
 
-refreshApiButton.addEventListener("click", async () => {
-  await checkApiHealth();
-});
-
 setDefaultDepartureTime();
 initMap();
-Promise.all([checkApiHealth(), loadConfig()]).catch((error) => {
+loadConfig().catch((error) => {
   statusEl.textContent = `Failed to load configuration: ${error.message}`;
 });

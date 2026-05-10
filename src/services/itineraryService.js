@@ -1,5 +1,6 @@
 const { INTEREST_CONFIG } = require("../config/airports");
 const { calculateFeasibility } = require("./feasibilityService");
+const { generateAiSchedule } = require("./aiScheduleService");
 const { fetchPois, getRouteEstimateMinutes } = require("./mapsService");
 const { addMinutes, formatTimestamp, minutesBetween } = require("../utils/time");
 
@@ -57,7 +58,7 @@ function buildSchedule({ airport, departureTime, option }) {
     {
       label: "Recommended airport buffer before departure",
       start: formatTimestamp(backAtAirportAt),
-      end: formatTimestamp(departureTime),
+      end: formatTimestamp(recommendedTerminalReturnAt),
       minutes: option.returnBufferMinutes,
       location: airport.name,
     },
@@ -152,6 +153,43 @@ async function buildLayoverPlan({ airport, departureTime, connectionType, intere
         maxTravelMinutesOneWay,
       });
 
+  const baseSchedule = bestOption ? buildSchedule({ airport, departureTime, option: bestOption }) : [];
+  const fallbackNarrative = buildNarrative({
+    airport,
+    bestOption,
+    connectionType,
+    feasibility,
+    interests: effectiveInterests,
+  });
+  const selectedPoi = bestOption
+    ? {
+        name: bestOption.poi.name,
+        lat: bestOption.poi.lat,
+        lon: bestOption.poi.lon,
+        category: bestOption.poi.category,
+        address: bestOption.poi.address,
+        outboundMinutes: bestOption.outboundMinutes,
+        inboundMinutes: bestOption.inboundMinutes,
+        dwellMinutes: bestOption.dwellMinutes,
+      }
+    : null;
+  const summary = {
+    layoverMinutes,
+    processingMinutes,
+    returnBufferMinutes,
+    availableTripMinutes,
+  };
+  const aiPlan = await generateAiSchedule({
+    airport,
+    connectionType,
+    interests: effectiveInterests,
+    feasibility,
+    summary,
+    selectedPoi,
+    schedule: baseSchedule,
+    fallbackNarrative,
+  });
+
   return {
     request: {
       airportCode: airport.code,
@@ -161,35 +199,24 @@ async function buildLayoverPlan({ airport, departureTime, connectionType, intere
     },
     airport,
     feasibility,
-    summary: {
-      layoverMinutes,
-      processingMinutes,
-      returnBufferMinutes,
-      availableTripMinutes,
+    summary,
+    schedule: aiPlan.schedule,
+    narrative: aiPlan.narrative,
+    ai: {
+      provider: aiPlan.provider,
+      model: aiPlan.model,
+      used: aiPlan.used,
+      title: aiPlan.title,
+      travelerTips: aiPlan.travelerTips,
+      error: aiPlan.error,
     },
-    schedule: bestOption ? buildSchedule({ airport, departureTime, option: bestOption }) : [],
-    narrative: buildNarrative({
-      airport,
-      bestOption,
-      connectionType,
-      feasibility,
-      interests: effectiveInterests,
-    }),
     map: {
       airport: {
         name: airport.name,
         lat: airport.lat,
         lon: airport.lon,
       },
-      selectedPoi: bestOption
-        ? {
-            name: bestOption.poi.name,
-            lat: bestOption.poi.lat,
-            lon: bestOption.poi.lon,
-            category: bestOption.poi.category,
-            address: bestOption.poi.address,
-          }
-        : null,
+      selectedPoi,
       candidates: enriched.slice(0, 5).map((item) => ({
         name: item.poi.name,
         lat: item.poi.lat,
