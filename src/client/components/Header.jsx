@@ -2,19 +2,40 @@ import React from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 
-export default function Header({ onOpenVault, theme = "dark", onToggleTheme }) {
+export default function Header({
+  onOpenVault,
+  theme = "dark",
+  onToggleTheme,
+  onGoHome,
+  showHomeAction = false,
+}) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const isLightTheme = theme === "light";
+  const handleGoHome = () => {
+    if (typeof onGoHome === "function") {
+      onGoHome();
+      return;
+    }
+    navigate("/");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
 
   return (
     <header className="header reveal">
-      <div className="logo">
-        <h1>LayoverPlus ✈️</h1>
-        <p>Safe, time-bounded layover planning with AI-assisted guidance.</p>
-      </div>
+      <button type="button" className="logo-button" onClick={handleGoHome}>
+        <div className="logo">
+          <h1>LayoverPlus ✈️</h1>
+          <p>Risk-aware layover intelligence for travel platforms and premium traveler products.</p>
+        </div>
+      </button>
       
       <div className="header-actions">
+        {showHomeAction && (
+          <button type="button" className="secondary-action sm-btn header-home-btn" onClick={handleGoHome}>
+            <span>Home</span>
+          </button>
+        )}
         {user ? (
           <div className="user-chip card">
             <button className="vault-btn" onClick={onOpenVault} title="Open Layover Vault">

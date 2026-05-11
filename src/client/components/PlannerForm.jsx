@@ -25,8 +25,32 @@ const SCENARIOS = {
     connectionType: "international",
     hoursAhead: 8,
     riskProfile: "conservative",
-    strategyPack: "standard",
+    strategyPack: "scenic-balance",
     interests: ["sightseeing", "food"],
+  },
+  "local-gems-lax": {
+    airportCode: "LAX",
+    connectionType: "domestic",
+    hoursAhead: 7,
+    riskProfile: "balanced",
+    strategyPack: "local-gems",
+    interests: ["food", "culture", "shopping"],
+  },
+  "museum-jfk": {
+    airportCode: "JFK",
+    connectionType: "international",
+    hoursAhead: 9,
+    riskProfile: "balanced",
+    strategyPack: "culture-deep",
+    interests: ["culture", "sightseeing"],
+  },
+  "recharge-sfo": {
+    airportCode: "SFO",
+    connectionType: "domestic",
+    hoursAhead: 4,
+    riskProfile: "conservative",
+    strategyPack: "recharge",
+    interests: ["food", "shopping"],
   },
 };
 
@@ -46,6 +70,21 @@ const SCENARIO_PRESENTATION = {
     title: "Scenic Window",
     summary: "Best for long windows with conservative safety buffers.",
   },
+  "local-gems-lax": {
+    icon: "🗺️",
+    title: "Local Gems",
+    summary: "Great for varied nearby picks beyond one category.",
+  },
+  "museum-jfk": {
+    icon: "🖼️",
+    title: "Museum Arc",
+    summary: "Long-window cultural route with balanced caution.",
+  },
+  "recharge-sfo": {
+    icon: "☕",
+    title: "Quick Recharge",
+    summary: "Short, low-stress reset close to the airport.",
+  },
 };
 
 const STRATEGIES = [
@@ -53,6 +92,8 @@ const STRATEGIES = [
   { id: "food-first", label: "Food First", desc: "Prioritizes high-rated local dining." },
   { id: "culture-deep", label: "Culture Deep Dive", desc: "Focuses on museums and landmarks." },
   { id: "recharge", label: "Recharge Nearby", desc: "Low-stress options close to terminal." },
+  { id: "local-gems", label: "Local Gems", desc: "Increases category variety in alternatives." },
+  { id: "scenic-balance", label: "Scenic Balance", desc: "Adds scenic/culture variety with moderate travel range." },
 ];
 
 const CONNECTION_OPTIONS = [
@@ -199,6 +240,9 @@ export default function PlannerForm({ airports, interestsConfig, generatePlan, i
       <form id="planner-form" className="form-card" ref={formRef} onSubmit={handleSubmit}>
         <p className="eyebrow">Planner</p>
         <h2>Build an itinerary</h2>
+        <p className="planner-lead">
+          Pick your layover constraints, then choose a strategy style for a safer off-airport plan.
+        </p>
         
         <section className="quick-start-block">
           <p className="mini-label">Quick Start Options</p>
@@ -252,6 +296,9 @@ export default function PlannerForm({ airports, interestsConfig, generatePlan, i
           </div>
         </section>
 
+        <section className="form-section compact">
+          <span className="mini-label">Layover Window</span>
+        </section>
         <label>
           <span>Arrival airport</span>
           <div className="airport-select-wrap">
@@ -321,8 +368,14 @@ export default function PlannerForm({ airports, interestsConfig, generatePlan, i
               <span>Strategy & Personality</span>
               <div className="pack-grid mini">
                 {STRATEGIES.map(p => (
-                  <button key={p.id} type="button" className={`pack-btn ${strategyPack === p.id ? 'active' : ''}`} onClick={() => setStrategyPack(p.id)}>
+                  <button
+                    key={p.id}
+                    type="button"
+                    className={`pack-btn ${strategyPack === p.id ? 'active' : ''}`}
+                    onClick={() => setStrategyPack(p.id)}
+                  >
                     <strong>{p.label}</strong>
+                    <small>{p.desc}</small>
                   </button>
                 ))}
               </div>
@@ -331,6 +384,9 @@ export default function PlannerForm({ airports, interestsConfig, generatePlan, i
             {/* Interests Section */}
             <div className="form-section">
               <span className="mini-label">Personalize Your Journey</span>
+              <p className="interest-helper">
+                {selectedInterests.length} interest{selectedInterests.length === 1 ? "" : "s"} selected
+              </p>
               <div className="interest-grid">
                 {Object.entries(interestsConfig).map(([key, cfg]) => (
                   <label key={key} className={`interest-chip ${selectedInterests.includes(key) ? 'active' : ''}`}>
@@ -350,25 +406,27 @@ export default function PlannerForm({ airports, interestsConfig, generatePlan, i
           </div>
         </details>
 
-        {user && (
-          <label className="checkbox-row premium-feature">
-            <input name="saveToVault" type="checkbox" defaultChecked />
-            <span>💾 Save this plan to my Layover Vault</span>
+        <section className="planner-submit-stack" aria-label="Plan actions">
+          {user && (
+            <label className="checkbox-row premium-feature">
+              <input name="saveToVault" type="checkbox" defaultChecked />
+              <span>💾 Save this plan to my Layover Vault</span>
+            </label>
+          )}
+
+          {formError && <p className="form-error">{formError}</p>}
+
+          <div className="action-row">
+            <button type="submit" id="submit-btn" disabled={isLoading} className="primary-btn">
+              <span>{isLoading ? "Generating..." : "Generate layover plan"}</span>
+            </button>
+          </div>
+          
+          <label className="checkbox-row small">
+            <input name="trustAcknowledged" type="checkbox" required />
+            <span>I understand this tool gives guidance only.</span>
           </label>
-        )}
-
-        {formError && <p className="form-error">{formError}</p>}
-
-        <div className="action-row">
-          <button type="submit" id="submit-btn" disabled={isLoading} className="primary-btn">
-            <span>{isLoading ? "Generating..." : "Generate layover plan"}</span>
-          </button>
-        </div>
-        
-        <label className="checkbox-row small">
-          <input name="trustAcknowledged" type="checkbox" required />
-          <span>I understand this tool gives guidance only.</span>
-        </label>
+        </section>
       </form>
     </aside>
   );

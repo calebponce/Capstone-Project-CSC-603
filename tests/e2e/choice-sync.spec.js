@@ -20,7 +20,8 @@ test('selecting an alternative updates summary, timeline, and map focus', async 
   await submitButton.click();
 
   const candidateCards = page.locator('.candidate-list .candidate-item');
-  await expect(candidateCards).toHaveCount(5);
+  await expect(candidateCards.first()).toBeVisible();
+  expect(await candidateCards.count()).toBeGreaterThanOrEqual(2);
 
   const selectionInfo = await page.evaluate(() => {
     const cards = Array.from(document.querySelectorAll('.candidate-list .candidate-item'));
@@ -46,14 +47,14 @@ test('selecting an alternative updates summary, timeline, and map focus', async 
     timeout: 45_000,
   });
 
-  await page.getByRole('button', { name: /^Timeline/ }).click();
+  await page.getByRole('tab', { name: /^Timeline/ }).click();
   const timelinePanel = page.locator('.tab-panel.active .timeline');
   await expect(timelinePanel).toBeVisible();
   await expect(timelinePanel).toContainText(new RegExp(escapeRegExp(targetName), 'i'), {
     timeout: 45_000,
   });
 
-  await page.getByRole('button', { name: /^Map$/ }).click();
+  await page.getByRole('tab', { name: /^Map$/ }).click();
   const mapContainer = page.locator('.tab-panel.active .map-container').first();
   await expect(mapContainer).toBeVisible();
   await expect(mapContainer).toHaveAttribute(

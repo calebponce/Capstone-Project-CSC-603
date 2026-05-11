@@ -18,7 +18,7 @@ export default function Footer() {
           </span>
         </div>
       </div>
-      <p className="footer-note">Built for CSC 603/803. Not for actual flight guarantees.</p>
+      <p className="footer-note">Launch prototype for layover intelligence workflows. Not production flight operations guidance.</p>
     </footer>
   );
 }

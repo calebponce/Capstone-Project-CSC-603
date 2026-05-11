@@ -11,12 +11,13 @@ function normalizeName(value) {
 
 export default function Map({
   currentPlan,
+  highlightCandidate = null,
   highlightCandidateName = null,
   compact = false,
   invalidateTrigger = null,
 }) {
   const renderedFocusCandidate =
-    highlightCandidateName || currentPlan?.map?.selectedPoi?.name || "";
+    highlightCandidate?.name || highlightCandidateName || currentPlan?.map?.selectedPoi?.name || "";
   const mapRef = useRef(null);
   const mapInstanceRef = useRef(null);
   const layerGroupRef = useRef(null);
@@ -70,10 +71,29 @@ export default function Map({
     if (mapInstanceRef.current && layerGroupRef.current && currentPlan && currentPlan.map && window.L) {
       const { airport, candidates, selectedPoi } = currentPlan.map;
       const L = window.L;
-      const highlightedCandidate = (candidates || []).find(
-        (candidate) => normalizeName(candidate.name) === normalizeName(highlightCandidateName)
+      const highlightedByCoordinates =
+        Number.isFinite(highlightCandidate?.lat) && Number.isFinite(highlightCandidate?.lon)
+          ? (candidates || []).find(
+              (candidate) =>
+                Math.abs(candidate.lat - highlightCandidate.lat) <= 0.0005 &&
+                Math.abs(candidate.lon - highlightCandidate.lon) <= 0.0005
+            ) || null
+          : null;
+      const highlightedByName = (candidates || []).find(
+        (candidate) =>
+          normalizeName(candidate.name) ===
+          normalizeName(highlightCandidate?.name || highlightCandidateName)
       );
-      const focusPoi = highlightedCandidate || selectedPoi || null;
+      const focusPoi =
+        highlightedByCoordinates ||
+        highlightedByName ||
+        (highlightCandidate &&
+        Number.isFinite(highlightCandidate.lat) &&
+        Number.isFinite(highlightCandidate.lon)
+          ? highlightCandidate
+          : null) ||
+        selectedPoi ||
+        null;
       
       layerGroupRef.current.clearLayers();
       const points = [];
@@ -107,7 +127,11 @@ export default function Map({
       const selectedMissingFromList =
         focusPoi &&
         !(candidates || []).some((candidate) =>
-          normalizeName(candidate?.name) === normalizeName(focusPoi?.name)
+          (normalizeName(candidate?.name) === normalizeName(focusPoi?.name) &&
+            Math.abs(candidate.lat - focusPoi.lat) <= 0.0005 &&
+            Math.abs(candidate.lon - focusPoi.lon) <= 0.0005) ||
+          (Math.abs(candidate.lat - focusPoi.lat) <= 0.0005 &&
+            Math.abs(candidate.lon - focusPoi.lon) <= 0.0005)
         );
       if (selectedMissingFromList) {
         L.circleMarker([focusPoi.lat, focusPoi.lon], {
@@ -154,7 +178,7 @@ export default function Map({
         }
       }, 60);
     }
-  }, [currentPlan, highlightCandidateName, compact, invalidateTrigger]);
+  }, [currentPlan, highlightCandidate, highlightCandidateName, compact, invalidateTrigger]);
 
   return (
     <div

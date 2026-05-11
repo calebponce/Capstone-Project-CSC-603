@@ -16,6 +16,11 @@ const { AIRPORTS, INTEREST_CONFIG, getAirportConfig } = require("./src/config/ai
 const { buildLayoverPlan } = require("./src/services/itineraryService");
 const { getFlightStatus } = require("./src/services/flightService");
 const { getMapsRuntimeStats } = require("./src/services/mapsService");
+const {
+  getPlacePreview,
+  getGooglePlacesApiKey,
+  getYelpApiKey,
+} = require("./src/services/placePreviewService");
 
 loadEnvFile();
 
@@ -35,6 +40,8 @@ const apiUsage = {
   usage: 0,
   plan: 0,
   flightStatus: 0,
+  placePreview: 0,
+  placePhoto: 0,
   feedback: 0,
   events: 0,
   replanHistory: 0,
@@ -70,7 +77,14 @@ function normalizeRiskProfile(value) {
 }
 
 function normalizeStrategyPack(value) {
-  return ["standard", "food-first", "culture-deep", "recharge"].includes(value)
+  return [
+    "standard",
+    "food-first",
+    "culture-deep",
+    "recharge",
+    "local-gems",
+    "scenic-balance",
+  ].includes(value)
     ? value
     : "standard";
 }
@@ -135,6 +149,18 @@ function sanitizePreferredPoi(preferredPoiInput) {
     category: sanitizeFreeText(preferredPoiInput.category, 80) || null,
     address: sanitizeFreeText(preferredPoiInput.address, 180) || null,
   };
+}
+
+function sanitizeGooglePhotoName(value) {
+  const raw = String(value || "").trim();
+  if (!raw.startsWith("places/") || !raw.includes("/photos/")) {
+    return null;
+  }
+  // Restrict to expected path characters.
+  if (!/^[A-Za-z0-9/_-]+$/.test(raw)) {
+    return null;
+  }
+  return raw.slice(0, 220);
 }
 
 function appendReplanHistory(sessionKey, entry) {
@@ -266,6 +292,8 @@ app.get("/api/usage", (_req, res) => {
       usageViews: apiUsage.usage,
       planRequests: apiUsage.plan,
       flightStatusChecks: apiUsage.flightStatus,
+      placePreviewRequests: apiUsage.placePreview,
+      placePhotoRequests: apiUsage.placePhoto,
       feedbackSubmissions: apiUsage.feedback,
       analyticsEvents: apiUsage.events,
       replanHistoryViews: apiUsage.replanHistory,
@@ -285,6 +313,76 @@ app.get("/api/usage", (_req, res) => {
     feedbackSampleSize: feedbackStore.length,
     eventSampleSize: eventStore.length,
   });
+});
+
+app.get("/api/place-preview", async (req, res) => {
+  markApiRequest("placePreview");
+  const name = sanitizeFreeText(req.query?.name, 120);
+  const lat = Number(req.query?.lat);
+  const lon = Number(req.query?.lon);
+  if (!name || !Number.isFinite(lat) || !Number.isFinite(lon)) {
+    return sendError(res, 400, "name, lat, and lon are required.");
+  }
+
+  const preview = await getPlacePreview({ name, lat, lon });
+  if (!preview) {
+    return sendError(res, 404, "No place preview available.");
+  }
+
+  return res.json({
+    meta: {
+      generatedAt: new Date().toISOString(),
+      apiVersion: pkg.version,
+      googlePlacesEnabled: Boolean(getGooglePlacesApiKey()),
+      yelpEnabled: Boolean(getYelpApiKey()),
+    },
+    preview,
+  });
+});
+
+app.get("/api/place-photo", async (req, res) => {
+  markApiRequest("placePhoto");
+  const provider = sanitizeFreeText(req.query?.provider, 24).toLowerCase();
+  if (provider !== "google") {
+    return sendError(res, 400, "Only provider=google is supported for photo proxy.");
+  }
+
+  const photoName = sanitizeGooglePhotoName(req.query?.photoName);
+  if (!photoName) {
+    return sendError(res, 400, "Valid Google photoName is required.");
+  }
+
+  const apiKey = getGooglePlacesApiKey();
+  if (!apiKey) {
+    return sendError(res, 503, "Google Places API key is not configured.");
+  }
+
+  const maxWidthPx = Math.max(260, Math.min(1280, Number(req.query?.maxWidthPx) || 960));
+  const photoUrl = `https://places.googleapis.com/v1/${photoName}/media?maxWidthPx=${maxWidthPx}`;
+
+  try {
+    const response = await fetch(photoUrl, {
+      headers: {
+        "X-Goog-Api-Key": apiKey,
+      },
+      redirect: "follow",
+    });
+
+    if (!response.ok) {
+      return sendError(res, response.status, `Place photo fetch failed (${response.status}).`);
+    }
+
+    const contentType = response.headers.get("content-type") || "image/jpeg";
+    const cacheControl = response.headers.get("cache-control") || "public, max-age=900";
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Cache-Control", cacheControl);
+    return res.send(buffer);
+  } catch (_error) {
+    return sendError(res, 502, "Unable to fetch place photo.");
+  }
 });
 
 app.post("/api/event", (req, res) => {

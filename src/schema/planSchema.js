@@ -9,7 +9,17 @@ const planSchema = z.object({
   airlineCode: z.string().max(3).nullable().optional(),
   flightNumber: z.string().max(6).nullable().optional(),
   riskProfile: z.enum(["conservative", "balanced", "explorer"]).optional().default("balanced"),
-  strategyPack: z.enum(["standard", "food-first", "culture-deep", "recharge"]).optional().default("standard"),
+  strategyPack: z
+    .enum([
+      "standard",
+      "food-first",
+      "culture-deep",
+      "recharge",
+      "local-gems",
+      "scenic-balance",
+    ])
+    .optional()
+    .default("standard"),
   preferredPoiName: z.string().trim().max(120).nullable().optional(),
   preferredPoi: z
     .object({

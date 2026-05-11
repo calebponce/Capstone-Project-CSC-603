@@ -53,6 +53,24 @@ const STRATEGY_PACK_CONFIG = {
     dwellDelta: -10,
     maxTravelDelta: -6,
   },
+  "local-gems": {
+    label: "Local Gems",
+    fallbackInterests: ["food", "culture", "shopping"],
+    dwellDelta: 8,
+    maxTravelDelta: 2,
+  },
+  "scenic-balance": {
+    label: "Scenic Balance",
+    fallbackInterests: ["sightseeing", "culture"],
+    dwellDelta: 5,
+    maxTravelDelta: 1,
+  },
+};
+
+const RISK_RANK = {
+  low: 0,
+  medium: 1,
+  high: 2,
 };
 
 function summarizeInterests(interests) {
@@ -88,6 +106,122 @@ function normalizeCoordinate(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function normalizeCategory(value) {
+  return String(value || "poi").trim().toLowerCase();
+}
+
+function normalizeRisk(value) {
+  const risk = String(value || "").trim().toLowerCase();
+  if (risk === "low" || risk === "medium" || risk === "high") {
+    return risk;
+  }
+  return "high";
+}
+
+function riskRank(value) {
+  return RISK_RANK[normalizeRisk(value)] ?? RISK_RANK.high;
+}
+
+function compareOptions(a, b) {
+  const aFeasible = a?.feasibility?.feasible === true;
+  const bFeasible = b?.feasibility?.feasible === true;
+  if (aFeasible !== bFeasible) {
+    return aFeasible ? -1 : 1;
+  }
+
+  const aRisk = riskRank(a?.feasibility?.riskLabel);
+  const bRisk = riskRank(b?.feasibility?.riskLabel);
+  if (aRisk !== bRisk) {
+    return aRisk - bRisk;
+  }
+
+  if ((b?.feasibility?.score || 0) !== (a?.feasibility?.score || 0)) {
+    return (b?.feasibility?.score || 0) - (a?.feasibility?.score || 0);
+  }
+
+  if ((b?.feasibility?.slackMinutes || 0) !== (a?.feasibility?.slackMinutes || 0)) {
+    return (b?.feasibility?.slackMinutes || 0) - (a?.feasibility?.slackMinutes || 0);
+  }
+
+  return (b?.dwellMinutes || 0) - (a?.dwellMinutes || 0);
+}
+
+function buildCandidateSet(options, selectedOption, limit = 8) {
+  if (!Array.isArray(options) || options.length === 0) {
+    return [];
+  }
+
+  const sorted = [...options].sort(compareOptions);
+  const selectedKey = selectedOption
+    ? `${normalizePoiName(selectedOption.poi?.name)}:${normalizeCoordinate(
+        selectedOption.poi?.lat
+      )}:${normalizeCoordinate(selectedOption.poi?.lon)}`
+    : null;
+  const pickedKeys = new Set();
+  const picked = [];
+
+  const pushOption = (item) => {
+    if (!item?.poi) {
+      return;
+    }
+    const key = `${normalizePoiName(item.poi.name)}:${normalizeCoordinate(item.poi.lat)}:${normalizeCoordinate(item.poi.lon)}`;
+    if (pickedKeys.has(key)) {
+      return;
+    }
+    pickedKeys.add(key);
+    picked.push(item);
+  };
+
+  if (selectedOption) {
+    pushOption(selectedOption);
+  }
+
+  const categoryBuckets = new Map();
+  for (const item of sorted) {
+    const category = normalizeCategory(item.poi?.category);
+    if (!categoryBuckets.has(category)) {
+      categoryBuckets.set(category, []);
+    }
+    categoryBuckets.get(category).push(item);
+  }
+
+  for (const bucket of categoryBuckets.values()) {
+    if (picked.length >= limit) {
+      break;
+    }
+    pushOption(bucket[0]);
+  }
+
+  for (const item of sorted) {
+    if (picked.length >= limit) {
+      break;
+    }
+    pushOption(item);
+  }
+
+  // Keep ordering stable and safer-first.
+  const dedupedSorted = picked.sort(compareOptions);
+  if (selectedKey) {
+    dedupedSorted.sort((left, right) => {
+      const leftKey = `${normalizePoiName(left.poi?.name)}:${normalizeCoordinate(
+        left.poi?.lat
+      )}:${normalizeCoordinate(left.poi?.lon)}`;
+      const rightKey = `${normalizePoiName(right.poi?.name)}:${normalizeCoordinate(
+        right.poi?.lat
+      )}:${normalizeCoordinate(right.poi?.lon)}`;
+      if (leftKey === selectedKey) {
+        return -1;
+      }
+      if (rightKey === selectedKey) {
+        return 1;
+      }
+      return compareOptions(left, right);
+    });
+  }
+
+  return dedupedSorted.slice(0, limit);
+}
+
 function poiMatchesRequested(poi, requestedPoi) {
   if (!poi || !requestedPoi) {
     return false;
@@ -117,30 +251,47 @@ function calculateScoreComponents({
   inboundMinutes,
   dwellMinutes,
   maxTravelMinutesOneWay,
+  recommendedTripMinutes = 45,
+  feasibilityScoreBreakdown = null,
 }) {
   const oneWay = Math.max(outboundMinutes || 0, inboundMinutes || 0);
-  const slackPoints = slackMinutes >= 45 ? 55 : slackMinutes >= 20 ? 40 : slackMinutes >= 0 ? 20 : 0;
-  const travelPoints = oneWay <= maxTravelMinutesOneWay ? 25 : oneWay <= maxTravelMinutesOneWay + 8 ? 10 : 0;
-  const dwellPoints = dwellMinutes >= 45 ? 20 : dwellMinutes >= 30 ? 10 : 0;
+  const imbalanceMinutes = Math.abs((outboundMinutes || 0) - (inboundMinutes || 0));
+  const slackPoints =
+    feasibilityScoreBreakdown?.slackComponent ??
+    (slackMinutes >= 45 ? 55 : slackMinutes >= 20 ? 40 : slackMinutes >= 0 ? 20 : 0);
+  const travelPoints =
+    feasibilityScoreBreakdown?.travelComponent ??
+    (oneWay <= maxTravelMinutesOneWay ? 25 : oneWay <= maxTravelMinutesOneWay + 8 ? 10 : 0);
+  const dwellPoints =
+    feasibilityScoreBreakdown?.dwellComponent ??
+    (dwellMinutes >= recommendedTripMinutes ? 14 : dwellMinutes >= 30 ? 8 : 3);
+  const variabilityPenalty = feasibilityScoreBreakdown?.variabilityPenalty ?? Math.max(0, imbalanceMinutes - 6);
+  const totalPoints = Math.max(0, Math.round(slackPoints + travelPoints + dwellPoints - variabilityPenalty));
 
   return {
     slack: {
       points: slackPoints,
-      maxPoints: 55,
+      maxPoints: 60,
       valueMinutes: slackMinutes,
     },
     travel: {
       points: travelPoints,
-      maxPoints: 25,
+      maxPoints: 26,
       valueMinutes: oneWay,
       thresholdMinutes: maxTravelMinutesOneWay,
     },
     activity: {
       points: dwellPoints,
-      maxPoints: 20,
+      maxPoints: 14,
       valueMinutes: dwellMinutes,
+      thresholdMinutes: recommendedTripMinutes,
     },
-    totalPoints: slackPoints + travelPoints + dwellPoints,
+    variability: {
+      points: -variabilityPenalty,
+      maxPenalty: 8,
+      valueMinutes: imbalanceMinutes,
+    },
+    totalPoints,
   };
 }
 
@@ -307,7 +458,7 @@ async function buildLayoverPlan({
     : pois;
 
   const enriched = [];
-  for (const poi of prioritizedPois.slice(0, 12)) {
+  for (const poi of prioritizedPois.slice(0, 20)) {
     const outboundMinutes = await getRouteEstimateMinutes(
       { lat: airport.lat, lon: airport.lon },
       { lat: poi.lat, lon: poi.lon },
@@ -330,6 +481,7 @@ async function buildLayoverPlan({
       processingMinutes,
       returnBufferMinutes,
       maxTravelMinutesOneWay,
+      recommendedDwellMinutes: recommendedTripMinutes,
     });
 
     enriched.push({
@@ -344,22 +496,17 @@ async function buildLayoverPlan({
     });
   }
 
-  enriched.sort((a, b) => {
-    if (b.feasibility.score !== a.feasibility.score) {
-      return b.feasibility.score - a.feasibility.score;
-    }
-    return b.dwellMinutes - a.dwellMinutes;
-  });
+  enriched.sort(compareOptions);
 
-  let preferredOption = normalizedPreferredPoiName
-    ? enriched.find((item) => normalizePoiName(item.poi.name) === normalizedPreferredPoiName) || null
+  let preferredOption = requestedPreferredPoi
+    ? enriched.find((item) => poiMatchesRequested(item.poi, requestedPreferredPoi)) || null
     : null;
-  if (!preferredOption && requestedPreferredPoi) {
+  if (!preferredOption && normalizedPreferredPoiName) {
     preferredOption =
-      enriched.find((item) => poiMatchesRequested(item.poi, requestedPreferredPoi)) || null;
+      enriched.find((item) => normalizePoiName(item.poi.name) === normalizedPreferredPoiName) || null;
   }
   const bestFeasibleOption = enriched.find((item) => item.feasibility.feasible) || null;
-  const selectedOption = preferredOption || bestFeasibleOption;
+  const selectedOption = preferredOption || bestFeasibleOption || enriched[0] || null;
   const feasibility = selectedOption
     ? selectedOption.feasibility
     : calculateFeasibility({
@@ -417,7 +564,10 @@ async function buildLayoverPlan({
     inboundMinutes: selectedOption?.inboundMinutes || 0,
     dwellMinutes: selectedOption?.dwellMinutes || 0,
     maxTravelMinutesOneWay,
+    recommendedTripMinutes,
+    feasibilityScoreBreakdown: feasibility?.scoreBreakdown || null,
   });
+  const candidateSet = buildCandidateSet(enriched, selectedOption, 8);
   const aiPlan = await generateAiSchedule({
     airport,
     connectionType,
@@ -481,7 +631,7 @@ async function buildLayoverPlan({
       requestedPoiName: requestedPreferredPoiName,
       selectedBy: preferredOption
         ? "user-preference"
-        : bestFeasibleOption
+        : selectedOption
           ? "system-ranking"
           : "none",
       preferredMatchFound: Boolean(preferredOption),
@@ -494,11 +644,12 @@ async function buildLayoverPlan({
         lon: airport.lon,
       },
       selectedPoi,
-      candidates: enriched.slice(0, 5).map((item) => ({
+      candidates: candidateSet.map((item) => ({
         name: item.poi.name,
         lat: item.poi.lat,
         lon: item.poi.lon,
         category: item.poi.category,
+        address: item.poi.address || "",
         score: item.feasibility.score,
         riskLabel: item.feasibility.riskLabel,
         feasible: item.feasibility.feasible,

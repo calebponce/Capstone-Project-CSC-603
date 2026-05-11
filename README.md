@@ -86,6 +86,7 @@ Travelers often remain in the airport during layovers because they cannot reliab
 * Simulated **flight pulse** with delay / gate / boarding signals
 * **Auto-replan history** and optional auto-replan trigger loop
 * In-app **action center** (airport map, ride estimate, share summary)
+* Optional **place preview + live review snippets** for the active stop
 * In-app **feedback submission** and product event telemetry endpoints
 
 ---
@@ -153,6 +154,10 @@ Create a local `.env` file in the project root:
 ```bash
 OPENAI_API_KEY=your_api_key_here
 OPENAI_MODEL=gpt-4.1-mini
+# Optional: enables live place ratings/reviews in Place Preview panel
+GOOGLE_PLACES_API_KEY=your_google_places_key_here
+# Optional: enables Yelp listing links, ratings, and review snippets
+YELP_API_KEY=your_yelp_fusion_key_here
 ```
 
 Then restart the server:
@@ -186,6 +191,14 @@ Best-effort product telemetry ingestion for frontend interaction events.
 ### POST /api/feedback
 
 Captures a 1–5 plan rating and optional comment.
+
+### GET /api/place-preview
+
+Returns place preview metadata for a selected POI (rating, map links, and live review snippets when Google Places key is configured).
+
+### GET /api/place-photo
+
+Secure proxy endpoint for Google Place photos used by the frontend preview cards. This keeps API keys on the server.
 
 ### POST /api/flight-status
 

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Map from "./Map";
 import ShareCenter from "./ShareCenter";
@@ -252,6 +252,159 @@ function buildNarrative({
   return `${prefix} Travel ${travelText}, dwell ${dwellText}, projected slack ${slackText}. ${insights.pros[0]} ${insights.cons[0]}`;
 }
 
+function parseDateSafe(value) {
+  if (!value) {
+    return null;
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function addMinutesSafe(date, minutes) {
+  const base = parseDateSafe(date);
+  if (!base || !Number.isFinite(minutes)) {
+    return null;
+  }
+  return new Date(base.getTime() + minutes * 60000);
+}
+
+function formatScheduleStamp(value) {
+  const date = parseDateSafe(value);
+  if (!date) {
+    return "-";
+  }
+  return new Intl.DateTimeFormat("en-US", {
+    month: "2-digit",
+    day: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function alignScheduleToCandidate(schedule, fromName, toName) {
+  if (!Array.isArray(schedule) || !schedule.length) {
+    return [];
+  }
+  if (!fromName || !toName || candidateNamesMatch(fromName, toName)) {
+    return schedule;
+  }
+
+  const fromPattern = new RegExp(escapeRegExp(fromName), "gi");
+
+  return schedule.map((item) => {
+    const locationMatches = candidateNamesMatch(item?.location, fromName);
+    const location = locationMatches ? toName : item.location;
+    const label =
+      typeof item?.label === "string" ? item.label.replace(fromPattern, toName) : item?.label;
+    return {
+      ...item,
+      label,
+      location,
+      source: item?.source || "aligned",
+    };
+  });
+}
+
+function buildPreviewSchedule(currentPlan, candidate) {
+  const arrivalTime = parseDateSafe(currentPlan?.request?.arrivalTime);
+  const departureTime = parseDateSafe(currentPlan?.request?.departureTime);
+  const processingMinutes = toFiniteNumber(currentPlan?.summary?.processingMinutes);
+  const returnBufferMinutes = toFiniteNumber(currentPlan?.summary?.returnBufferMinutes);
+  const outboundMinutes = toFiniteNumber(candidate?.outboundMinutes);
+  const inboundMinutes = toFiniteNumber(candidate?.inboundMinutes);
+  const dwellMinutes = toFiniteNumber(candidate?.dwellMinutes);
+  const airportName = currentPlan?.airport?.name || currentPlan?.map?.airport?.name || "Airport";
+  const airportCode = currentPlan?.airport?.code || currentPlan?.map?.airport?.code || "Airport";
+  const poiName = candidate?.name || currentPlan?.map?.selectedPoi?.name || "Selected stop";
+
+  if (
+    !arrivalTime ||
+    !departureTime ||
+    processingMinutes == null ||
+    returnBufferMinutes == null ||
+    outboundMinutes == null ||
+    inboundMinutes == null ||
+    dwellMinutes == null
+  ) {
+    return null;
+  }
+
+  const leaveAirportAt = addMinutesSafe(arrivalTime, processingMinutes);
+  const arrivePoiAt = addMinutesSafe(leaveAirportAt, outboundMinutes);
+  const leavePoiAt = addMinutesSafe(arrivePoiAt, dwellMinutes);
+  const backAtAirportAt = addMinutesSafe(leavePoiAt, inboundMinutes);
+  const recommendedTerminalReturnAt = addMinutesSafe(backAtAirportAt, returnBufferMinutes);
+
+  if (
+    !leaveAirportAt ||
+    !arrivePoiAt ||
+    !leavePoiAt ||
+    !backAtAirportAt ||
+    !recommendedTerminalReturnAt
+  ) {
+    return null;
+  }
+
+  return [
+    {
+      label: "Arrive and clear airport processing",
+      start: formatScheduleStamp(arrivalTime),
+      end: formatScheduleStamp(leaveAirportAt),
+      minutes: processingMinutes,
+      location: airportName,
+      source: "preview",
+    },
+    {
+      label: `Travel to ${poiName}`,
+      start: formatScheduleStamp(leaveAirportAt),
+      end: formatScheduleStamp(arrivePoiAt),
+      minutes: outboundMinutes,
+      location: poiName,
+      source: "preview",
+    },
+    {
+      label: `Explore ${poiName}`,
+      start: formatScheduleStamp(arrivePoiAt),
+      end: formatScheduleStamp(leavePoiAt),
+      minutes: dwellMinutes,
+      location: poiName,
+      source: "preview",
+    },
+    {
+      label: `Return to ${airportCode}`,
+      start: formatScheduleStamp(leavePoiAt),
+      end: formatScheduleStamp(backAtAirportAt),
+      minutes: inboundMinutes,
+      location: airportName,
+      source: "preview",
+    },
+    {
+      label: "Recommended airport buffer before departure",
+      start: formatScheduleStamp(backAtAirportAt),
+      end: formatScheduleStamp(recommendedTerminalReturnAt),
+      minutes: returnBufferMinutes,
+      location: airportName,
+      source: "preview",
+    },
+    {
+      label: "Ready for departing flight",
+      start: formatScheduleStamp(recommendedTerminalReturnAt),
+      end: formatScheduleStamp(departureTime),
+      minutes: Math.max(
+        0,
+        Math.round((departureTime.getTime() - recommendedTerminalReturnAt.getTime()) / 60000)
+      ),
+      location: airportName,
+      source: "preview",
+    },
+  ];
+}
+
 export default function ResultsArea({
   currentPlan,
   isLoading,
@@ -262,6 +415,19 @@ export default function ResultsArea({
   onSelectCandidate,
 }) {
   const [activeTab, setActiveTab] = useState("decision");
+  const tabIds = {
+    decision: "results-tab-decision",
+    timeline: "results-tab-timeline",
+    map: "results-tab-map",
+  };
+  const panelIds = {
+    decision: "results-panel-decision",
+    timeline: "results-panel-timeline",
+    map: "results-panel-map",
+  };
+  const [placePreview, setPlacePreview] = useState(null);
+  const [isPlacePreviewLoading, setIsPlacePreviewLoading] = useState(false);
+  const [placePreviewError, setPlacePreviewError] = useState(null);
 
   const selectedCandidate = useMemo(
     () => buildSelectedCandidateFromPlan(currentPlan),
@@ -293,7 +459,12 @@ export default function ResultsArea({
     selectedCandidate ||
     sortedCandidates[0] ||
     null;
-  const summaryCandidate = committedCandidate || displayCandidate;
+  const summaryCandidate = displayCandidate || committedCandidate;
+  const isChoiceOverride = Boolean(
+    displayCandidate &&
+      committedCandidate &&
+      !candidateNamesMatch(displayCandidate.name, committedCandidate.name)
+  );
 
   const isPendingSelection = Boolean(pendingCandidateName && isLoading);
   const fallbackRiskLabel = currentPlan?.feasibility?.riskLabel || "Medium";
@@ -321,7 +492,8 @@ export default function ResultsArea({
     airportCode: currentPlan?.request?.airportCode,
     isPendingSelection,
     fallbackNarrative: currentPlan?.narrative,
-    isPersistedSelection: candidateNamesMatch(summaryCandidate?.name, selectedPoiName),
+    isPersistedSelection:
+      candidateNamesMatch(summaryCandidate?.name, selectedPoiName) && !isChoiceOverride,
   });
 
   const planTitle = summaryTitle;
@@ -331,8 +503,9 @@ export default function ResultsArea({
   const generatedAtLabel = currentPlan?.meta?.generatedAt
     ? formatDateTime(currentPlan.meta.generatedAt)
     : formatDateTime(new Date());
-  const selectedByLabel =
-    currentPlan?.selection?.selectedBy === "user-preference"
+  const selectedByLabel = isChoiceOverride
+    ? "Previewing user selection"
+    : currentPlan?.selection?.selectedBy === "user-preference"
       ? "User selection applied"
       : currentPlan?.selection?.selectedBy === "system-ranking"
         ? "System ranked selection"
@@ -344,9 +517,68 @@ export default function ResultsArea({
 
   const actionPoi = summaryCandidate || currentPlan?.map?.selectedPoi || null;
   const isSelectedByUser = currentPlan?.selection?.selectedBy === "user-preference";
-  const mapFocusName = displayCandidate?.name || summaryCandidate?.name || null;
+  const mapFocusCandidate = displayCandidate || summaryCandidate || null;
+  const mapFocusName = mapFocusCandidate?.name || null;
   const baselineCandidate = sortedCandidates[0] || null;
   const metricDelta = buildMetricDelta(displayCandidate, baselineCandidate);
+  const previewSchedule = useMemo(
+    () => buildPreviewSchedule(currentPlan, summaryCandidate),
+    [currentPlan, summaryCandidate]
+  );
+  const timelineSchedule =
+    isChoiceOverride && Array.isArray(previewSchedule) && previewSchedule.length > 0
+      ? previewSchedule
+      : isChoiceOverride
+        ? alignScheduleToCandidate(
+            currentPlan?.schedule || [],
+            committedCandidate?.name || selectedPoiName,
+            summaryCandidate?.name
+          )
+      : currentPlan?.schedule || [];
+  const timelineCount = timelineSchedule.length;
+
+  useEffect(() => {
+    const lat = toFiniteNumber(summaryCandidate?.lat);
+    const lon = toFiniteNumber(summaryCandidate?.lon);
+    const name = String(summaryCandidate?.name || "").trim();
+    if (!name || lat == null || lon == null) {
+      setPlacePreview(null);
+      setPlacePreviewError(null);
+      setIsPlacePreviewLoading(false);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    setIsPlacePreviewLoading(true);
+    setPlacePreviewError(null);
+
+    fetch(
+      `/api/place-preview?name=${encodeURIComponent(name)}&lat=${lat}&lon=${lon}`,
+      { signal: controller.signal }
+    )
+      .then(async (response) => {
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => null);
+          throw new Error(errorData?.error || "Place preview unavailable");
+        }
+        return response.json();
+      })
+      .then((data) => {
+        setPlacePreview(data?.preview || null);
+      })
+      .catch((error) => {
+        if (error?.name === "AbortError") {
+          return;
+        }
+        setPlacePreview(null);
+        setPlacePreviewError(error.message || "Place preview unavailable");
+      })
+      .finally(() => {
+        setIsPlacePreviewLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [summaryCandidate?.name, summaryCandidate?.lat, summaryCandidate?.lon]);
 
   const handleCandidateClick = (candidate) => {
     if (!candidate?.name || !onSelectCandidate) {
@@ -396,75 +628,74 @@ export default function ResultsArea({
           <article className="card empty-state-card reveal">
             <div className="empty-state-content">
               <div className="empty-state-hero">
-                <p className="eyebrow">Ready For Takeoff</p>
-                <h2>Your layover command center</h2>
+                <p className="eyebrow">Before You Generate</p>
+                <h2>Build one layover plan and compare the safest options in one surface.</h2>
                 <p>
-                  Build a timing-safe layover plan and instantly preview risk, route fit, and
-                  fallback options before you leave the terminal.
+                  Set the airport, arrival window, and travel style on the left. LayoverPlus will
+                  score nearby stops, explain the tradeoffs, and keep the decision, timeline, map,
+                  and place preview aligned when you switch choices.
                 </p>
               </div>
 
               <div className="empty-kpi-grid">
                 <div className="empty-kpi">
-                  <span>Supported Airports</span>
-                  <strong>3</strong>
+                  <span>Best Stop</span>
+                  <strong>Risk-Scored Recommendation</strong>
                 </div>
                 <div className="empty-kpi">
-                  <span>Risk Profiles</span>
-                  <strong>3</strong>
+                  <span>Trip Timing</span>
+                  <strong>Timeline + Safety Buffer</strong>
                 </div>
                 <div className="empty-kpi">
-                  <span>Strategy Packs</span>
-                  <strong>4</strong>
+                  <span>Place Context</span>
+                  <strong>Map + Photos + Reviews</strong>
                 </div>
               </div>
 
               <div className="empty-launch-options">
-                <p className="mini-label">Recommended Launch Options</p>
+                <p className="mini-label">What Your Plan Includes</p>
                 <div className="empty-option-grid">
                   <article className="empty-option-card">
-                    <h3>Food Sprint</h3>
-                    <p>Short culinary layover with high-confidence travel timing.</p>
-                    <span>SFO · +5h · Balanced</span>
+                    <h3>Safer alternative ranking</h3>
+                    <p>Compare nearby stops by score, slack buffer, travel time, and risk explanation.</p>
+                    <span>Choice comparison</span>
                   </article>
                   <article className="empty-option-card">
-                    <h3>Culture Stop</h3>
-                    <p>Museum and landmark focus with moderate exploration time.</p>
-                    <span>JFK · +6h · Balanced</span>
+                    <h3>Synced timeline and route</h3>
+                    <p>See when to leave, how long to stay, and how much buffer remains before departure.</p>
+                    <span>Timing model</span>
                   </article>
                   <article className="empty-option-card">
-                    <h3>Scenic Window</h3>
-                    <p>Conservative extended layover with buffer-first planning.</p>
-                    <span>LAX · +8h · Conservative</span>
+                    <h3>Place preview before you go</h3>
+                    <p>Inspect the stop on a map, open it in Apple or Google Maps, and review the place context.</p>
+                    <span>Preview surface</span>
                   </article>
                 </div>
               </div>
 
               <div className="empty-flow">
-                <p className="mini-label">How This Works</p>
+                <p className="mini-label">How To Use It</p>
                 <ol>
                   <li>
-                    <strong>Define your layover window</strong>
-                    <span>Arrival, departure, connection type, and airport context.</span>
+                    <strong>Set your airport and layover window</strong>
+                    <span>Use a quick-start template or enter your own arrival and departure times.</span>
                   </li>
                   <li>
-                    <strong>Set your travel intent</strong>
-                    <span>Risk profile, strategy pack, and personal interests.</span>
+                    <strong>Generate and compare options</strong>
+                    <span>Choose the safest stop or inspect alternatives with clear upsides and downsides.</span>
                   </li>
                   <li>
-                    <strong>Get a live recommendation</strong>
-                    <span>
-                      Feasibility score, timeline, map candidate, and flight-triggered replan
-                      signals.
-                    </span>
+                    <strong>Open maps, rides, or save the result</strong>
+                    <span>Move from plan to action without losing the timing and risk context.</span>
                   </li>
                 </ol>
               </div>
 
               <div className="empty-signals">
-                <span className="empty-pill">Risk-aware scoring</span>
-                <span className="empty-pill">Timeline + map</span>
-                <span className="empty-pill">Auto-replan support</span>
+                <span className="empty-pill">Feasibility scoring</span>
+                <span className="empty-pill">Live choice sync</span>
+                <span className="empty-pill">Map auto-focus</span>
+                <span className="empty-pill">Place preview links</span>
               </div>
             </div>
           </article>
@@ -474,6 +705,7 @@ export default function ResultsArea({
           key="results"
           id="results-top"
           className="results"
+          aria-busy={isLoading ? "true" : "false"}
           variants={containerVariants}
           initial="hidden"
           animate="show"
@@ -486,6 +718,11 @@ export default function ResultsArea({
                 {isSelectedByUser && (
                   <p className="candidate-selection-note">
                     Custom option selected from alternatives.
+                  </p>
+                )}
+                {isChoiceOverride && !isPendingSelection && (
+                  <p className="candidate-selection-note">
+                    Comparing live preview for {summaryCandidate?.name}.
                   </p>
                 )}
                 {isPendingSelection && (
@@ -563,7 +800,7 @@ export default function ResultsArea({
               <section className="candidate-section">
                 <p className="mini-label">Compare Alternative Stops</p>
                 <p className="candidate-rank-note">
-                  Ranked safest-first for current timing. Click a card to apply instantly.
+                  Ranked safest-first for current timing. {sortedCandidates.length} options available.
                 </p>
                 {metricDelta && baselineCandidate && (
                   <div className="candidate-delta-card">
@@ -592,7 +829,7 @@ export default function ResultsArea({
 
                       return (
                         <button
-                          key={candidate.name}
+                          key={`${candidate.name}-${candidate.lat}-${candidate.lon}`}
                           type="button"
                           className={`candidate-item ${isActive ? "active" : ""}`}
                           onClick={() => handleCandidateClick(candidate)}
@@ -614,6 +851,9 @@ export default function ResultsArea({
                             {(candidate.category || "Point of interest").replaceAll("_", " ")} · Score{" "}
                             {candidate.score}/100 · Slack {formatMinutes(candidate.slackMinutes)}
                           </p>
+                          {candidate.address ? (
+                            <p className="candidate-meta-address">{candidate.address}</p>
+                          ) : null}
                           <div className="candidate-score-row">
                             <span className={`risk-chip ${riskTone}`}>{String(candidate.riskLabel || "Medium").toUpperCase()}</span>
                             <span className="mono">
@@ -636,12 +876,155 @@ export default function ResultsArea({
                   <div className="candidate-preview-map">
                     <Map
                       currentPlan={currentPlan}
+                      highlightCandidate={mapFocusCandidate}
                       highlightCandidateName={mapFocusName}
                       compact
                       invalidateTrigger={`${activeTab}:${mapFocusName || "none"}:${isPendingSelection ? "pending" : "ready"}`}
                     />
                   </div>
                 </div>
+              </section>
+            )}
+
+            {summaryCandidate && (
+              <section className="place-preview-panel">
+                <div className="place-preview-head">
+                  <p className="mini-label">Place Preview</p>
+                  <h3>{summaryCandidate.name}</h3>
+                </div>
+                {isPlacePreviewLoading ? (
+                  <p className="candidate-preview-note">Loading place details and reviews...</p>
+                ) : (
+                  <>
+                    <p className="place-preview-address">
+                      {placePreview?.place?.address || summaryCandidate?.address || "Address unavailable."}
+                    </p>
+                    <div className="place-preview-meta">
+                      <span>
+                        Rating:{" "}
+                        {Number.isFinite(placePreview?.place?.rating)
+                          ? `${placePreview.place.rating.toFixed(1)} / 5`
+                          : "n/a"}
+                      </span>
+                      <span>
+                        Reviews:{" "}
+                        {Number.isFinite(placePreview?.place?.reviewCount)
+                          ? placePreview.place.reviewCount
+                          : "n/a"}
+                      </span>
+                      <span>
+                        Source:{" "}
+                        {placePreview?.provider === "google"
+                          ? "Google Places"
+                          : placePreview?.provider === "yelp"
+                            ? "Yelp"
+                            : "Maps links"}
+                      </span>
+                      {placePreview?.yelp?.rating != null ? (
+                        <span>
+                          Yelp: {placePreview.yelp.rating.toFixed(1)} / 5 ({placePreview.yelp.reviewCount || 0})
+                        </span>
+                      ) : null}
+                    </div>
+                    {Array.isArray(placePreview?.photos) && placePreview.photos.length > 0 ? (
+                      <div className="place-photo-grid">
+                        {placePreview.photos.slice(0, 4).map((photo) => (
+                          <figure key={photo.id || photo.url} className="place-photo-card">
+                            <img
+                              src={photo.url}
+                              alt={`${summaryCandidate.name} preview`}
+                              loading="lazy"
+                            />
+                            <figcaption>{photo.provider === "yelp" ? "Yelp photo" : "Map photo"}</figcaption>
+                          </figure>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="candidate-preview-note">
+                        No photo preview available yet for this place.
+                      </p>
+                    )}
+                    {placePreview?.yelp ? (
+                      <div className="place-yelp-card">
+                        <p className="place-yelp-title">Yelp snapshot</p>
+                        <p>
+                          {placePreview.yelp.name || summaryCandidate.name}
+                          {placePreview.yelp.priceLevel ? ` · ${placePreview.yelp.priceLevel}` : ""}
+                        </p>
+                        {Array.isArray(placePreview.yelp.categories) &&
+                        placePreview.yelp.categories.length > 0 ? (
+                          <p className="place-yelp-categories">
+                            {placePreview.yelp.categories.join(" · ")}
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    <div className="place-preview-links">
+                      {placePreview?.links?.googleMaps && (
+                        <a
+                          href={placePreview.links.googleMaps}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="ride-open-btn"
+                        >
+                          Open Google Maps
+                        </a>
+                      )}
+                      {placePreview?.links?.appleMaps && (
+                        <a
+                          href={placePreview.links.appleMaps}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="ride-open-btn"
+                        >
+                          Open Apple Maps
+                        </a>
+                      )}
+                      {placePreview?.links?.yelp && (
+                        <a
+                          href={placePreview.links.yelp}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="ride-open-btn"
+                        >
+                          Open on Yelp
+                        </a>
+                      )}
+                    </div>
+                    {Array.isArray(placePreview?.reviews) && placePreview.reviews.length > 0 ? (
+                      <div className="place-review-list">
+                        {placePreview.reviews.slice(0, 3).map((review, index) => (
+                          <article key={`${review.author}-${index}`} className="place-review-item">
+                            <p className="place-review-head">
+                              <strong>{review.author}</strong>
+                              <span>
+                                {review.source === "yelp" ? "Yelp" : "Google"} ·{" "}
+                                {Number.isFinite(review.rating) ? `${review.rating}/5` : "n/a"}
+                              </span>
+                            </p>
+                            <p>{review.text}</p>
+                            {review.sourceUrl ? (
+                              <a
+                                href={review.sourceUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="place-review-link"
+                              >
+                                View source
+                              </a>
+                            ) : null}
+                          </article>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="candidate-preview-note">
+                        {placePreviewError
+                          ? `Reviews unavailable: ${placePreviewError}`
+                          : "No live review text returned for this location yet."}
+                      </p>
+                    )}
+                  </>
+                )}
               </section>
             )}
 
@@ -702,11 +1085,11 @@ export default function ResultsArea({
             <motion.article variants={itemVariants} className="card flight-pulse reveal">
               <div className="summary-head">
                 <div>
-                  <span className="eyebrow">Itinerary Summary</span>
+                  <span className="eyebrow">Selected Plan</span>
                   <h2>{planTitle}</h2>
                 </div>
                 <div className="decision-pill">
-                  <span className="mini-label">System Recommendation</span>
+                  <span className="mini-label">Safety Call</span>
                   <div className={`decision-banner ${summaryFeasible ? "go" : "no-go"}`}>
                     {decisionText}
                   </div>
@@ -740,18 +1123,30 @@ export default function ResultsArea({
 
           <motion.nav variants={itemVariants} className="result-tabs reveal" role="tablist">
             <button
+              id={tabIds.decision}
+              role="tab"
+              aria-selected={activeTab === "decision"}
+              aria-controls={panelIds.decision}
               className={`tab-btn ${activeTab === "decision" ? "active" : ""}`}
               onClick={() => setActiveTab("decision")}
             >
-              Decision
+              Overview
             </button>
             <button
+              id={tabIds.timeline}
+              role="tab"
+              aria-selected={activeTab === "timeline"}
+              aria-controls={panelIds.timeline}
               className={`tab-btn ${activeTab === "timeline" ? "active" : ""}`}
               onClick={() => setActiveTab("timeline")}
             >
-              Timeline ({currentPlan.schedule?.length || 0})
+              Timeline ({timelineCount})
             </button>
             <button
+              id={tabIds.map}
+              role="tab"
+              aria-selected={activeTab === "map"}
+              aria-controls={panelIds.map}
               className={`tab-btn ${activeTab === "map" ? "active" : ""}`}
               onClick={() => setActiveTab("map")}
             >
@@ -763,6 +1158,9 @@ export default function ResultsArea({
             <AnimatePresence mode="wait">
               {activeTab === "decision" && (
                 <motion.article
+                  id={panelIds.decision}
+                  role="tabpanel"
+                  aria-labelledby={tabIds.decision}
                   key="decision"
                   initial={{ opacity: 0, x: 10 }}
                   animate={{ opacity: 1, x: 0 }}
@@ -770,7 +1168,15 @@ export default function ResultsArea({
                   className="card reveal tab-panel active"
                 >
                   <div className="summary-head">
-                    <h2>Trip snapshot</h2>
+                    <div>
+                      <h2>Trip snapshot</h2>
+                      <p className="tab-intro">
+                        Core timing and safety metrics for the active stop.
+                      </p>
+                      {summaryCandidate?.name && (
+                        <p className="summary-meta-line">Active stop: {summaryCandidate.name}</p>
+                      )}
+                    </div>
                   </div>
                   <div className="summary-grid">
                     <div>
@@ -793,12 +1199,19 @@ export default function ResultsArea({
                       <span>Slack</span>
                       <strong>{formatMinutes(summarySlack)}</strong>
                     </div>
+                    <div>
+                      <span>Risk</span>
+                      <strong>{riskClass.toUpperCase()}</strong>
+                    </div>
                   </div>
                 </motion.article>
               )}
 
               {activeTab === "timeline" && (
                 <motion.article
+                  id={panelIds.timeline}
+                  role="tabpanel"
+                  aria-labelledby={tabIds.timeline}
                   key="timeline"
                   initial={{ opacity: 0, x: 10 }}
                   animate={{ opacity: 1, x: 0 }}
@@ -806,14 +1219,20 @@ export default function ResultsArea({
                   className="card reveal tab-panel active"
                 >
                   <h2>Timeline</h2>
-                  {isPendingSelection && (
+                  <p className="tab-intro">
+                    Departure-safe sequence for the currently applied stop.
+                  </p>
+                  {isChoiceOverride && (
                     <p className="pending-panel-note">
-                      Refreshing timeline for {pendingCandidateName}. Showing current applied plan until update completes.
+                      Previewing timeline for {summaryCandidate?.name}. It will be finalized when sync completes.
                     </p>
                   )}
                   <div className="timeline">
-                    {currentPlan.schedule.map((item, idx) => (
-                      <div key={`${item.label}-${idx}`} className="timeline-item">
+                    {timelineSchedule.map((item, idx) => (
+                      <div
+                        key={`${item.label}-${idx}`}
+                        className={`timeline-item ${item?.source === "preview" ? "preview" : ""}`}
+                      >
                         <div className="time-range">
                           {item.start} - {item.end}
                         </div>
@@ -830,6 +1249,9 @@ export default function ResultsArea({
 
               {activeTab === "map" && (
                 <motion.article
+                  id={panelIds.map}
+                  role="tabpanel"
+                  aria-labelledby={tabIds.map}
                   key="map"
                   initial={{ opacity: 0, scale: 0.95 }}
                   animate={{ opacity: 1, scale: 1 }}
@@ -837,6 +1259,9 @@ export default function ResultsArea({
                   className="card reveal tab-panel active"
                 >
                   <h2>Map view</h2>
+                  <p className="tab-intro">
+                    Auto-focused route between the airport and the active destination.
+                  </p>
                   {isPendingSelection && (
                     <p className="pending-panel-note">
                       Refreshing map for {pendingCandidateName}. Route will update when the applied result returns.
@@ -844,6 +1269,7 @@ export default function ResultsArea({
                   )}
                   <Map
                     currentPlan={currentPlan}
+                    highlightCandidate={mapFocusCandidate}
                     highlightCandidateName={mapFocusName}
                     invalidateTrigger={`${activeTab}:${mapFocusName || "none"}:${isPendingSelection ? "pending" : "ready"}`}
                   />
