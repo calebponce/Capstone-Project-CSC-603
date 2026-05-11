@@ -4,11 +4,107 @@ const { generateAiSchedule } = require("./aiScheduleService");
 const { fetchPois, getRouteEstimateMinutes } = require("./mapsService");
 const { addMinutes, formatTimestamp, minutesBetween } = require("../utils/time");
 
+const RISK_PROFILE_CONFIG = {
+  conservative: {
+    label: "Conservative",
+    processingDelta: 10,
+    returnBufferDelta: 20,
+    maxTravelDelta: -6,
+    dwellDelta: -10,
+  },
+  balanced: {
+    label: "Balanced",
+    processingDelta: 0,
+    returnBufferDelta: 0,
+    maxTravelDelta: 0,
+    dwellDelta: 0,
+  },
+  explorer: {
+    label: "Explorer",
+    processingDelta: -5,
+    returnBufferDelta: -15,
+    maxTravelDelta: 6,
+    dwellDelta: 15,
+  },
+};
+
+const STRATEGY_PACK_CONFIG = {
+  standard: {
+    label: "Standard",
+    fallbackInterests: ["sightseeing", "food"],
+    dwellDelta: 0,
+    maxTravelDelta: 0,
+  },
+  "food-first": {
+    label: "Food First",
+    fallbackInterests: ["food", "shopping"],
+    dwellDelta: 10,
+    maxTravelDelta: 0,
+  },
+  "culture-deep": {
+    label: "Culture Deep Dive",
+    fallbackInterests: ["culture", "sightseeing"],
+    dwellDelta: 15,
+    maxTravelDelta: -2,
+  },
+  recharge: {
+    label: "Recharge Nearby",
+    fallbackInterests: ["food"],
+    dwellDelta: -10,
+    maxTravelDelta: -6,
+  },
+};
+
 function summarizeInterests(interests) {
   if (!interests.length) {
     return "general exploration";
   }
   return interests.map((interest) => INTEREST_CONFIG[interest]?.label || interest).join(", ");
+}
+
+function normalizeRiskProfile(profile) {
+  return RISK_PROFILE_CONFIG[profile] ? profile : "balanced";
+}
+
+function normalizeStrategyPack(pack) {
+  return STRATEGY_PACK_CONFIG[pack] ? pack : "standard";
+}
+
+function clampMinimum(value, minimum) {
+  return Math.max(minimum, Math.round(value));
+}
+
+function calculateScoreComponents({
+  slackMinutes,
+  outboundMinutes,
+  inboundMinutes,
+  dwellMinutes,
+  maxTravelMinutesOneWay,
+}) {
+  const oneWay = Math.max(outboundMinutes || 0, inboundMinutes || 0);
+  const slackPoints = slackMinutes >= 45 ? 55 : slackMinutes >= 20 ? 40 : slackMinutes >= 0 ? 20 : 0;
+  const travelPoints = oneWay <= maxTravelMinutesOneWay ? 25 : oneWay <= maxTravelMinutesOneWay + 8 ? 10 : 0;
+  const dwellPoints = dwellMinutes >= 45 ? 20 : dwellMinutes >= 30 ? 10 : 0;
+
+  return {
+    slack: {
+      points: slackPoints,
+      maxPoints: 55,
+      valueMinutes: slackMinutes,
+    },
+    travel: {
+      points: travelPoints,
+      maxPoints: 25,
+      valueMinutes: oneWay,
+      thresholdMinutes: maxTravelMinutesOneWay,
+    },
+    activity: {
+      points: dwellPoints,
+      maxPoints: 20,
+      valueMinutes: dwellMinutes,
+    },
+    totalPoints: slackPoints + travelPoints + dwellPoints,
+  };
 }
 
 function buildNarrative({ airport, bestOption, connectionType, feasibility, interests }) {
@@ -72,17 +168,42 @@ function buildSchedule({ airport, departureTime, option }) {
   ];
 }
 
-async function buildLayoverPlan({ airport, arrivalTime, departureTime, connectionType, interests }) {
+async function buildLayoverPlan({
+  airport,
+  arrivalTime,
+  departureTime,
+  connectionType,
+  interests,
+  riskProfile = "balanced",
+  strategyPack = "standard",
+  airlineCode = null,
+  flightNumber = null,
+}) {
   const planStartTime = arrivalTime instanceof Date ? arrivalTime : new Date();
   const layoverMinutes = minutesBetween(planStartTime, departureTime);
-
-  const processingMinutes = airport.processingMinutes[connectionType];
-  const returnBufferMinutes = airport.returnBufferMinutes[connectionType];
-  const recommendedTripMinutes = airport.recommendedTripMinutes[connectionType];
-  const maxTravelMinutesOneWay = airport.maxTravelMinutesOneWay[connectionType];
+  const normalizedRiskProfile = normalizeRiskProfile(riskProfile);
+  const normalizedStrategyPack = normalizeStrategyPack(strategyPack);
+  const riskConfig = RISK_PROFILE_CONFIG[normalizedRiskProfile];
+  const strategyConfig = STRATEGY_PACK_CONFIG[normalizedStrategyPack];
+  const baseProcessingMinutes = airport.processingMinutes[connectionType];
+  const baseReturnBufferMinutes = airport.returnBufferMinutes[connectionType];
+  const baseRecommendedTripMinutes = airport.recommendedTripMinutes[connectionType];
+  const baseMaxTravelMinutesOneWay = airport.maxTravelMinutesOneWay[connectionType];
+  const processingMinutes = clampMinimum(baseProcessingMinutes + riskConfig.processingDelta, 10);
+  const returnBufferMinutes = clampMinimum(baseReturnBufferMinutes + riskConfig.returnBufferDelta, 45);
+  const recommendedTripMinutes = clampMinimum(
+    baseRecommendedTripMinutes + riskConfig.dwellDelta + strategyConfig.dwellDelta,
+    20
+  );
+  const maxTravelMinutesOneWay = clampMinimum(
+    baseMaxTravelMinutesOneWay + riskConfig.maxTravelDelta + strategyConfig.maxTravelDelta,
+    8
+  );
   const tagSet = new Set();
 
-  const effectiveInterests = interests.length ? interests : ["sightseeing", "food"];
+  const effectiveInterests = interests.length
+    ? interests
+    : strategyConfig.fallbackInterests;
   effectiveInterests.forEach((interest) => {
     for (const tag of INTEREST_CONFIG[interest].tags) {
       tagSet.add(tag);
@@ -91,9 +212,15 @@ async function buildLayoverPlan({ airport, arrivalTime, departureTime, connectio
 
   const availableTripMinutes = layoverMinutes - processingMinutes - returnBufferMinutes;
 
-  const pois = availableTripMinutes > 30
-    ? await fetchPois({ airport, tags: [...tagSet] })
-    : [];
+  let pois = [];
+  if (availableTripMinutes > 30) {
+    try {
+      pois = await fetchPois({ airport, tags: [...tagSet] });
+    } catch (_error) {
+      // Graceful fallback: continue with in-airport recommendation when POI lookup fails.
+      pois = [];
+    }
+  }
 
   const enriched = [];
   for (const poi of pois.slice(0, 12)) {
@@ -175,10 +302,23 @@ async function buildLayoverPlan({ airport, arrivalTime, departureTime, connectio
     : null;
   const summary = {
     layoverMinutes,
+    baseProcessingMinutes,
+    baseReturnBufferMinutes,
+    baseRecommendedTripMinutes,
+    baseMaxTravelMinutesOneWay,
     processingMinutes,
     returnBufferMinutes,
+    recommendedTripMinutes,
+    maxTravelMinutesOneWay,
     availableTripMinutes,
   };
+  const scoreComponents = calculateScoreComponents({
+    slackMinutes: feasibility.slackMinutes,
+    outboundMinutes: bestOption?.outboundMinutes || 0,
+    inboundMinutes: bestOption?.inboundMinutes || 0,
+    dwellMinutes: bestOption?.dwellMinutes || 0,
+    maxTravelMinutesOneWay,
+  });
   const aiPlan = await generateAiSchedule({
     airport,
     connectionType,
@@ -197,6 +337,10 @@ async function buildLayoverPlan({ airport, arrivalTime, departureTime, connectio
       interests: effectiveInterests,
       arrivalTime: planStartTime.toISOString(),
       departureTime: departureTime.toISOString(),
+      riskProfile: normalizedRiskProfile,
+      strategyPack: normalizedStrategyPack,
+      airlineCode,
+      flightNumber,
     },
     airport,
     feasibility,
@@ -210,6 +354,28 @@ async function buildLayoverPlan({ airport, arrivalTime, departureTime, connectio
       title: aiPlan.title,
       travelerTips: aiPlan.travelerTips,
       error: aiPlan.error,
+    },
+    explainability: {
+      riskProfile: {
+        key: normalizedRiskProfile,
+        label: riskConfig.label,
+        adjustments: {
+          processingDelta: riskConfig.processingDelta,
+          returnBufferDelta: riskConfig.returnBufferDelta,
+          maxTravelDelta: riskConfig.maxTravelDelta,
+          dwellDelta: riskConfig.dwellDelta,
+        },
+      },
+      strategyPack: {
+        key: normalizedStrategyPack,
+        label: strategyConfig.label,
+        fallbackInterests: strategyConfig.fallbackInterests,
+        adjustments: {
+          dwellDelta: strategyConfig.dwellDelta,
+          maxTravelDelta: strategyConfig.maxTravelDelta,
+        },
+      },
+      scoreComponents,
     },
     map: {
       airport: {

@@ -70,13 +70,21 @@ Travelers often remain in the airport during layovers because they cannot reliab
 ## ✨ Features
 
 * Input fields for **airport, arrival time, departure time, connection type, and interests**
+* Required **trust acknowledgment** before plan generation
+* Adjustable **risk profiles** (`conservative`, `balanced`, `explorer`)
+* Clickable **strategy packs** to bias itinerary style
 * Airport-specific **processing assumptions and safety buffers**
 * **Feasibility scoring** with `Low`, `Medium`, and `High` risk labels
 * Nearby POI search using **OpenStreetMap Overpass**
 * Travel time estimation via **OSRM routing**
+* Retry + cache guardrails for route/POI data calls
 * Structured **timestamped itinerary blocks**
 * AI-generated **narrative summaries**
 * Interactive **map view using Leaflet**
+* Simulated **flight pulse** with delay / gate / boarding signals
+* **Auto-replan history** and optional auto-replan trigger loop
+* In-app **action center** (airport map, ride estimate, share summary)
+* In-app **feedback submission** and product event telemetry endpoints
 
 ---
 
@@ -85,7 +93,9 @@ Travelers often remain in the airport during layovers because they cannot reliab
 1. Enter your **arrival airport, arrival time, and next flight departure time**
 2. Select your **connection type** (domestic / international)
 3. Choose your **interests** (food, culture, sightseeing, shopping)
-4. Receive:
+4. Choose your **risk profile** and **strategy pack**
+5. Confirm the guidance acknowledgment checkbox
+6. Receive:
 
    * Risk label
    * Timestamped itinerary
@@ -143,6 +153,26 @@ Returns service health and API metadata used by the frontend connection checker.
 
 Returns configuration and supported options.
 
+### GET /api/usage
+
+Returns API usage counters and recent `/api/plan` performance snapshot.
+
+### POST /api/event
+
+Best-effort product telemetry ingestion for frontend interaction events.
+
+### POST /api/feedback
+
+Captures a 1–5 plan rating and optional comment.
+
+### POST /api/flight-status
+
+Returns simulated flight context (gate, delay, status, replan trigger hints) for the active request.
+
+### GET /api/replan-history
+
+Returns recent replan signals for a session key.
+
 ### POST /api/plan
 
 Generates a layover itinerary.
@@ -155,7 +185,13 @@ Generates a layover itinerary.
   "arrivalTime": "2026-04-14T14:30",
   "departureTime": "2026-04-14T20:30",
   "connectionType": "domestic",
-  "interests": ["food", "culture"]
+  "riskProfile": "balanced",
+  "strategyPack": "standard",
+  "interests": ["food", "culture"],
+  "airlineCode": "AA",
+  "flightNumber": "1234",
+  "trustAcknowledged": true,
+  "sessionKey": "optional-session-key"
 }
 ```
 

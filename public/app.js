@@ -2,11 +2,14 @@ const airportSelect = document.getElementById("airportCode");
 const interestsContainer = document.getElementById("interests");
 const form = document.getElementById("planner-form");
 const statusEl = document.getElementById("status");
+const buildProgressEl = document.getElementById("build-progress");
 const submitButton = form.querySelector("button[type='submit']");
 const resetPlannerBtn = document.getElementById("reset-planner");
-const copyBriefBtn = document.getElementById("copy-brief");
-const exportPlanBtn = document.getElementById("export-plan");
 const resultsTopEl = document.getElementById("results-top");
+const airlineCodeInput = document.getElementById("airlineCode");
+const flightNumberInput = document.getElementById("flightNumber");
+const ticketFlightAwareLink = document.getElementById("ticket-flightaware");
+const ticketGoogleFlightsLink = document.getElementById("ticket-googleflights");
 
 const resultTitle = document.getElementById("result-title");
 const riskPill = document.getElementById("risk-pill");
@@ -23,6 +26,8 @@ const narrativeEl = document.getElementById("narrative");
 const aiDetailsEl = document.getElementById("ai-details");
 const requestMetaEl = document.getElementById("request-meta");
 const planUpdatedEl = document.getElementById("plan-updated");
+const allocationBarEl = document.getElementById("allocation-bar");
+const allocationLegendEl = document.getElementById("allocation-legend");
 const scheduleEl = document.getElementById("schedule");
 const candidatesEl = document.getElementById("candidates");
 const safetyChecklistEl = document.getElementById("safety-checklist");
@@ -33,7 +38,6 @@ const confidenceLabelEl = document.getElementById("confidence-label");
 const arrivalInput = document.getElementById("arrivalTime");
 const departureInput = document.getElementById("departureTime");
 const layoverWindowEl = document.getElementById("layover-window");
-const togglePresentationBtn = document.getElementById("toggle-presentation");
 const travelFactEl = document.getElementById("travel-fact");
 const nextStepWrapEl = document.getElementById("next-step");
 const nextStepTextEl = document.getElementById("next-step-text");
@@ -42,11 +46,32 @@ const presetButtons = Array.from(document.querySelectorAll(".preset-btn"));
 const scenarioButtons = Array.from(document.querySelectorAll(".scenario-btn"));
 const tabButtons = Array.from(document.querySelectorAll(".tab-btn"));
 const tabPanels = Array.from(document.querySelectorAll(".tab-panel"));
-
-const apiHealthCard = document.querySelector(".api-health");
-const apiStateEl = document.getElementById("api-state");
-const apiLatencyEl = document.getElementById("api-latency");
-const apiMetaEl = document.getElementById("api-meta");
+const tabDecisionEl = document.getElementById("tab-decision");
+const tabTimelineEl = document.getElementById("tab-timeline");
+const tabAlternativesEl = document.getElementById("tab-alternatives");
+const tabMapEl = document.getElementById("tab-map");
+const riskProfileSelect = document.getElementById("riskProfile");
+const packButtons = Array.from(document.querySelectorAll(".pack-btn"));
+const autoReplanInput = document.getElementById("autoReplan");
+const trustAcknowledgedInput = document.getElementById("trustAcknowledged");
+const openAirportMapBtn = document.getElementById("open-airport-map");
+const openRideLinkBtn = document.getElementById("open-ride-link");
+const toggleShareCardBtn = document.getElementById("toggle-share-card");
+const shareCardEl = document.getElementById("share-card");
+const sharePreviewEl = document.getElementById("share-preview");
+const flightBadgeEl = document.getElementById("flight-badge");
+const flightStatusLineEl = document.getElementById("flight-status-line");
+const flightAirlineEl = document.getElementById("flight-airline");
+const flightGateEl = document.getElementById("flight-gate");
+const flightDelayEl = document.getElementById("flight-delay");
+const flightEtaEl = document.getElementById("flight-eta");
+const flightUpdatedEl = document.getElementById("flight-updated");
+const flightEventsEl = document.getElementById("flight-events");
+const replanHistoryEl = document.getElementById("replan-history");
+const feedbackButtons = Array.from(document.querySelectorAll(".feedback-btn"));
+const feedbackCommentInput = document.getElementById("feedback-comment");
+const feedbackSubmitBtn = document.getElementById("submit-feedback");
+const feedbackStatusEl = document.getElementById("feedback-status");
 
 let map;
 let layerGroup;
@@ -56,25 +81,46 @@ let selectedCandidateIndex = -1;
 let lastPlanData = null;
 let lastRequestPayload = null;
 let activeTab = "decision";
-let presentationModeEnabled = false;
+let buildProgressTimer = null;
+let selectedStrategyPack = "standard";
+let sessionKey = null;
+let flightPollTimer = null;
+let replanInFlight = false;
+let lastAutoReplanSignature = null;
+let selectedFeedbackScore = null;
+let lastFlightSnapshot = null;
+
+const BUILD_PROGRESS_MESSAGES = [
+  "Checking backend availability...",
+  "Calculating safe layover windows...",
+  "Evaluating nearby options and routing...",
+  "Scoring risk and preparing recommendation...",
+];
+const FLIGHT_POLL_INTERVAL_MS = 45000;
 
 const SCENARIOS = {
   "food-sfo": {
     airportCode: "SFO",
     connectionType: "domestic",
     hoursAhead: 5,
+    riskProfile: "balanced",
+    strategyPack: "food-first",
     interests: ["food", "shopping"],
   },
   "culture-jfk": {
     airportCode: "JFK",
     connectionType: "domestic",
     hoursAhead: 6,
+    riskProfile: "balanced",
+    strategyPack: "culture-deep",
     interests: ["culture", "sightseeing"],
   },
   "scenic-lax": {
     airportCode: "LAX",
     connectionType: "international",
     hoursAhead: 8,
+    riskProfile: "conservative",
+    strategyPack: "standard",
     interests: ["sightseeing", "food"],
   },
 };
@@ -201,15 +247,6 @@ function updateLayoverWindowHint() {
   layoverWindowEl.classList.add("good");
 }
 
-function setPresentationMode(enabled) {
-  presentationModeEnabled = enabled;
-  document.body.classList.toggle("presentation-mode", presentationModeEnabled);
-  if (togglePresentationBtn) {
-    togglePresentationBtn.setAttribute("aria-pressed", String(presentationModeEnabled));
-    togglePresentationBtn.textContent = `Presentation mode: ${presentationModeEnabled ? "On" : "Off"}`;
-  }
-}
-
 function setTravelFact(message) {
   if (!travelFactEl) {
     return;
@@ -254,12 +291,6 @@ function runNextStepAction() {
     form.requestSubmit();
     return;
   }
-  if (action === "copy") {
-    copyPlanBrief().catch(() => {
-      setStatus("Could not copy the plan brief.", "error");
-    });
-    return;
-  }
   if (["decision", "timeline", "alternatives", "map"].includes(action)) {
     setActiveTab(action);
     resultsTopEl.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -282,9 +313,149 @@ function setStatus(message, type = "info") {
   statusEl.className = `status ${type}`;
 }
 
-function setPlanActionState(enabled) {
-  copyBriefBtn.disabled = !enabled;
-  exportPlanBtn.disabled = !enabled;
+function setBuildProgressMessage(message) {
+  if (!buildProgressEl) {
+    return;
+  }
+  buildProgressEl.textContent = message;
+}
+
+function stopBuildProgressTicker() {
+  if (buildProgressTimer) {
+    clearInterval(buildProgressTimer);
+    buildProgressTimer = null;
+  }
+}
+
+function startBuildProgressTicker() {
+  stopBuildProgressTicker();
+  let index = 0;
+  setBuildProgressMessage(BUILD_PROGRESS_MESSAGES[index]);
+  buildProgressTimer = setInterval(() => {
+    index = (index + 1) % BUILD_PROGRESS_MESSAGES.length;
+    setBuildProgressMessage(BUILD_PROGRESS_MESSAGES[index]);
+  }, 1400);
+}
+
+function normalizeAirlineCode(value) {
+  return String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 3);
+}
+
+function normalizeFlightNumber(value) {
+  return String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 6);
+}
+
+function getFlightContext() {
+  return {
+    airlineCode: normalizeAirlineCode(airlineCodeInput?.value),
+    flightNumber: normalizeFlightNumber(flightNumberInput?.value),
+  };
+}
+
+function updateTicketLinks() {
+  if (!ticketFlightAwareLink || !ticketGoogleFlightsLink) {
+    return;
+  }
+
+  const { airlineCode, flightNumber } = getFlightContext();
+  const combined = `${airlineCode}${flightNumber}`.trim();
+
+  if (!combined) {
+    ticketFlightAwareLink.href = "#";
+    ticketGoogleFlightsLink.href = "#";
+    ticketFlightAwareLink.classList.add("disabled");
+    ticketGoogleFlightsLink.classList.add("disabled");
+    return;
+  }
+
+  const encoded = encodeURIComponent(combined);
+  ticketFlightAwareLink.href = `https://www.flightaware.com/live/flight/${encoded}`;
+  ticketGoogleFlightsLink.href = `https://www.google.com/travel/flights?q=${encoded}`;
+  ticketFlightAwareLink.classList.remove("disabled");
+  ticketGoogleFlightsLink.classList.remove("disabled");
+}
+
+async function checkApiHealth() {
+  try {
+    const response = await fetch("/api/health", { cache: "no-store" });
+    if (!response.ok) {
+      return false;
+    }
+    const data = await response.json();
+    return data.status === "ok";
+  } catch (_error) {
+    return false;
+  }
+}
+
+async function sendEvent(eventType, stage, details = {}) {
+  try {
+    await fetch("/api/event", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        eventType,
+        stage,
+        sessionKey,
+        details,
+      }),
+    });
+  } catch (_error) {
+    // Analytics events are best-effort only.
+  }
+}
+
+function normalizeRiskProfile(value) {
+  return ["conservative", "balanced", "explorer"].includes(value) ? value : "balanced";
+}
+
+function normalizeStrategyPack(value) {
+  return ["standard", "food-first", "culture-deep", "recharge"].includes(value) ? value : "standard";
+}
+
+function getStrategyPackLabel(pack) {
+  const labels = {
+    standard: "Standard",
+    "food-first": "Food First",
+    "culture-deep": "Culture Deep Dive",
+    recharge: "Recharge Nearby",
+  };
+  return labels[pack] || "Standard";
+}
+
+function setStrategyPack(pack, { emitEvent = true } = {}) {
+  const normalized = normalizeStrategyPack(pack);
+  selectedStrategyPack = normalized;
+  packButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.pack === normalized);
+  });
+  if (emitEvent) {
+    sendEvent("strategy_pack_selected", "planner", { strategyPack: normalized });
+  }
+}
+
+function setTabLabels({ timelineCount = 0, alternativesCount = 0 } = {}) {
+  if (tabDecisionEl) {
+    tabDecisionEl.textContent = "Decision";
+  }
+  if (tabTimelineEl) {
+    tabTimelineEl.textContent = timelineCount > 0 ? `Timeline (${timelineCount})` : "Timeline";
+  }
+  if (tabAlternativesEl) {
+    tabAlternativesEl.textContent =
+      alternativesCount > 0 ? `Alternatives (${alternativesCount})` : "Alternatives";
+  }
+  if (tabMapEl) {
+    tabMapEl.textContent = "Map";
+  }
 }
 
 function setActiveTab(tab) {
@@ -323,8 +494,10 @@ function setActivePreset(hours) {
 function updatePlannerChecklist() {
   const { arrivalDate, hasArrival, hasDeparture, layoverMinutes } = getTimeWindow();
   const connectionType = form.elements.connectionType.value;
+  const riskProfile = normalizeRiskProfile(form.elements.riskProfile?.value);
   const selectedInterests = form.querySelectorAll("input[name='interests']:checked").length;
   const minutesUntilArrival = hasArrival ? Math.round((arrivalDate.getTime() - Date.now()) / 60000) : null;
+  const trustReady = Boolean(trustAcknowledgedInput?.checked);
 
   const layoverLine = !hasArrival || !hasDeparture
     ? "Layover window not set yet."
@@ -342,11 +515,17 @@ function updatePlannerChecklist() {
     ? "International selected: stricter processing and return assumptions apply."
     : "Domestic selected: moderate processing assumptions apply.";
 
+  const profileLine = `Risk profile: ${riskProfile}. Strategy pack: ${getStrategyPackLabel(selectedStrategyPack)}.`;
+
   const interestLine = selectedInterests > 0
     ? `${selectedInterests} interest${selectedInterests > 1 ? "s" : ""} selected.`
     : "No interests selected; default categories will be used.";
 
-  plannerChecklistEl.innerHTML = [layoverLine, timingLine, connectionLine, interestLine]
+  const trustLine = trustReady
+    ? "Guidance acknowledgment complete."
+    : "Check guidance acknowledgment before generating a plan.";
+
+  plannerChecklistEl.innerHTML = [layoverLine, timingLine, connectionLine, profileLine, interestLine, trustLine]
     .map((line) => `<li>${escapeHtml(line)}</li>`)
     .join("");
 
@@ -362,6 +541,10 @@ function applyScenario(scenarioKey) {
 
   form.elements.airportCode.value = scenario.airportCode;
   form.elements.connectionType.value = scenario.connectionType;
+  if (form.elements.riskProfile) {
+    form.elements.riskProfile.value = normalizeRiskProfile(scenario.riskProfile);
+  }
+  setStrategyPack(scenario.strategyPack || "standard", { emitEvent: false });
   setDefaultArrivalTime();
   setDepartureTimeFromHours(scenario.hoursAhead);
   setActivePreset(scenario.hoursAhead);
@@ -386,6 +569,13 @@ function resetResultsView() {
   decisionWhyEl.innerHTML = "<p>Generate a plan to see why this recommendation was made.</p>";
   scoreBreakdownEl.className = "breakdown-list";
   scoreBreakdownEl.innerHTML = "<p>Generate a plan to view score components.</p>";
+  if (allocationBarEl && allocationLegendEl) {
+    allocationBarEl.className = "allocation-bar empty";
+    allocationBarEl.innerHTML = '<span class="allocation-empty">Generate a plan to view time distribution.</span>';
+    allocationLegendEl.className = "allocation-legend empty";
+    allocationLegendEl.innerHTML = "";
+  }
+  setBuildProgressMessage("");
   narrativeEl.textContent = "";
   aiDetailsEl.className = "ai-details hidden";
   aiDetailsEl.innerHTML = "";
@@ -414,13 +604,72 @@ function resetResultsView() {
   scheduleEl.textContent = "No itinerary yet.";
   candidatesEl.className = "candidate-list empty";
   candidatesEl.textContent = "Generate a plan to compare candidate POIs.";
+  if (shareCardEl && sharePreviewEl) {
+    shareCardEl.classList.add("hidden");
+    sharePreviewEl.textContent = "Generate a plan to build a share summary.";
+  }
+  if (toggleShareCardBtn) {
+    toggleShareCardBtn.textContent = "Show share card";
+  }
+  if (openAirportMapBtn) {
+    openAirportMapBtn.disabled = true;
+    openAirportMapBtn.dataset.href = "";
+  }
+  if (openRideLinkBtn) {
+    openRideLinkBtn.disabled = true;
+    openRideLinkBtn.dataset.href = "";
+  }
+  if (flightBadgeEl) {
+    flightBadgeEl.textContent = "No context";
+    flightBadgeEl.className = "risk-pill neutral";
+  }
+  if (flightStatusLineEl) {
+    flightStatusLineEl.textContent = "Add flight code + number to enable status signals.";
+  }
+  if (flightAirlineEl) {
+    flightAirlineEl.textContent = "-";
+  }
+  if (flightGateEl) {
+    flightGateEl.textContent = "-";
+  }
+  if (flightDelayEl) {
+    flightDelayEl.textContent = "-";
+  }
+  if (flightEtaEl) {
+    flightEtaEl.textContent = "-";
+  }
+  if (flightUpdatedEl) {
+    flightUpdatedEl.textContent = "No flight status pulled yet.";
+  }
+  if (flightEventsEl) {
+    flightEventsEl.className = "event-list empty";
+    flightEventsEl.textContent = "No active flight alerts.";
+  }
+  if (replanHistoryEl) {
+    replanHistoryEl.className = "history-list empty";
+    replanHistoryEl.textContent = "No replan events yet.";
+  }
+  if (feedbackStatusEl) {
+    feedbackStatusEl.textContent = "No feedback sent yet.";
+    feedbackStatusEl.classList.remove("warn", "good");
+  }
+  selectedFeedbackScore = null;
+  feedbackButtons.forEach((button) => {
+    button.classList.remove("active");
+  });
 
   lastPlanData = null;
   lastRequestPayload = null;
   lastCandidates = [];
   selectedCandidateIndex = -1;
   candidateMarkers = [];
-  setPlanActionState(false);
+  sessionKey = null;
+  lastFlightSnapshot = null;
+  if (flightPollTimer) {
+    clearInterval(flightPollTimer);
+    flightPollTimer = null;
+  }
+  replanInFlight = false;
 
   if (layerGroup) {
     layerGroup.clearLayers();
@@ -430,6 +679,7 @@ function resetResultsView() {
   }
 
   setActiveTab("decision");
+  setTabLabels();
   updateTravelFact();
 }
 
@@ -440,48 +690,6 @@ function initMap() {
     attribution: "&copy; OpenStreetMap contributors",
   }).addTo(map);
   layerGroup = L.layerGroup().addTo(map);
-}
-
-function setApiStatus({
-  state = "checking",
-  label = "Checking backend...",
-  latency = "-",
-  meta = "",
-} = {}) {
-  apiHealthCard.className = `api-health ${state}`;
-  apiStateEl.textContent = label;
-  apiLatencyEl.textContent = latency;
-  apiMetaEl.textContent = meta;
-}
-
-async function checkApiHealth() {
-  setApiStatus({ state: "checking", label: "Checking backend...", latency: "-" });
-  const startedAt = performance.now();
-  try {
-    const response = await fetch("/api/health", { cache: "no-store" });
-    const data = await response.json();
-    const latency = `${Math.round(performance.now() - startedAt)} ms`;
-
-    if (!response.ok || data.status !== "ok") {
-      throw new Error(data.error || "Health check returned non-ok status.");
-    }
-
-    setApiStatus({
-      state: "online",
-      label: "Backend online",
-      latency,
-      meta: `Server time ${formatDateTime(data.timestamp)} · v${data.version || "unknown"}`,
-    });
-    return true;
-  } catch (error) {
-    setApiStatus({
-      state: "offline",
-      label: "Backend unreachable",
-      latency: "-",
-      meta: error.message || "Could not reach API",
-    });
-    return false;
-  }
 }
 
 function renderSchedule(schedule) {
@@ -536,7 +744,9 @@ function renderDecisionBanner(data) {
 
 function renderDecisionWhy(data) {
   const selectedPoi = data.map?.selectedPoi;
-  const maxTravel = data.airport?.maxTravelMinutesOneWay?.[data.request?.connectionType] ?? null;
+  const maxTravel = data.summary?.maxTravelMinutesOneWay
+    ?? data.airport?.maxTravelMinutesOneWay?.[data.request?.connectionType]
+    ?? null;
   const outbound = selectedPoi?.outboundMinutes ?? null;
   const slack = data.feasibility?.slackMinutes ?? null;
   const score = data.feasibility?.score ?? null;
@@ -551,6 +761,12 @@ function renderDecisionWhy(data) {
     score == null ? "Score unavailable." : `Confidence score is ${score}/100.`,
     slack == null ? "Slack is unavailable." : `Return slack is ${formatMinutes(slack)}.`,
     travelLine,
+    data.explainability?.riskProfile?.label
+      ? `Risk profile: ${data.explainability.riskProfile.label}.`
+      : "Risk profile unavailable.",
+    data.explainability?.strategyPack?.label
+      ? `Strategy pack: ${data.explainability.strategyPack.label}.`
+      : "Strategy pack unavailable.",
   ];
 
   decisionWhyEl.className = "decision-why";
@@ -560,17 +776,23 @@ function renderDecisionWhy(data) {
 }
 
 function renderScoreBreakdown(data) {
+  const backendScore = data.explainability?.scoreComponents;
   const slack = data.feasibility?.slackMinutes ?? -1;
   const selectedPoi = data.map?.selectedPoi;
   const outbound = selectedPoi?.outboundMinutes ?? 0;
   const inbound = selectedPoi?.inboundMinutes ?? 0;
   const dwell = selectedPoi?.dwellMinutes ?? 0;
-  const maxTravel = data.airport?.maxTravelMinutesOneWay?.[data.request?.connectionType] ?? 0;
+  const maxTravel = data.summary?.maxTravelMinutesOneWay
+    ?? data.airport?.maxTravelMinutesOneWay?.[data.request?.connectionType]
+    ?? 0;
   const oneWay = Math.max(outbound, inbound);
 
-  const slackPoints = slack >= 45 ? 55 : slack >= 20 ? 40 : slack >= 0 ? 20 : 0;
-  const travelPoints = oneWay <= maxTravel ? 25 : oneWay <= maxTravel + 8 ? 10 : 0;
-  const dwellPoints = dwell >= 45 ? 20 : dwell >= 30 ? 10 : 0;
+  const slackPoints = backendScore?.slack?.points
+    ?? (slack >= 45 ? 55 : slack >= 20 ? 40 : slack >= 0 ? 20 : 0);
+  const travelPoints = backendScore?.travel?.points
+    ?? (oneWay <= maxTravel ? 25 : oneWay <= maxTravel + 8 ? 10 : 0);
+  const dwellPoints = backendScore?.activity?.points
+    ?? (dwell >= 45 ? 20 : dwell >= 30 ? 10 : 0);
 
   const rows = [
     { label: "Time slack", points: slackPoints, max: 55 },
@@ -592,6 +814,70 @@ function renderScoreBreakdown(data) {
             <div class="breakdown-fill" style="width:${width}%"></div>
           </div>
         </article>
+      `;
+    })
+    .join("");
+}
+
+function renderAllocation(data) {
+  if (!allocationBarEl || !allocationLegendEl) {
+    return;
+  }
+  const layoverMinutes = data.summary?.layoverMinutes ?? 0;
+  if (!Number.isFinite(layoverMinutes) || layoverMinutes <= 0) {
+    allocationBarEl.className = "allocation-bar empty";
+    allocationBarEl.innerHTML = '<span class="allocation-empty">Layover window unavailable.</span>';
+    allocationLegendEl.className = "allocation-legend empty";
+    allocationLegendEl.innerHTML = "";
+    return;
+  }
+
+  const selectedPoi = data.map?.selectedPoi || {};
+  const processing = Math.max(0, data.summary?.processingMinutes ?? 0);
+  const travel = Math.max(0, (selectedPoi.outboundMinutes ?? 0) + (selectedPoi.inboundMinutes ?? 0));
+  const activity = Math.max(0, selectedPoi.dwellMinutes ?? 0);
+  const buffer = Math.max(0, data.summary?.returnBufferMinutes ?? 0);
+  const slack = Math.max(0, data.feasibility?.slackMinutes ?? 0);
+  const used = processing + travel + activity + buffer + slack;
+  const remaining = Math.max(0, layoverMinutes - used);
+
+  const segments = [
+    { label: "Processing", key: "processing", minutes: processing },
+    { label: "Travel", key: "travel", minutes: travel },
+    { label: "Activity", key: "activity", minutes: activity },
+    { label: "Buffer", key: "buffer", minutes: buffer },
+    { label: "Slack", key: "slack", minutes: slack },
+    { label: "Unallocated", key: "other", minutes: remaining },
+  ].filter((segment) => segment.minutes > 0);
+
+  if (!segments.length) {
+    allocationBarEl.className = "allocation-bar empty";
+    allocationBarEl.innerHTML = '<span class="allocation-empty">No allocatable time segments available.</span>';
+    allocationLegendEl.className = "allocation-legend empty";
+    allocationLegendEl.innerHTML = "";
+    return;
+  }
+
+  allocationBarEl.className = "allocation-bar";
+  allocationBarEl.innerHTML = segments
+    .map((segment) => {
+      const width = ((segment.minutes / layoverMinutes) * 100).toFixed(2);
+      return `<span class="allocation-segment ${segment.key}" style="flex:0 0 ${width}%" title="${escapeHtml(
+        `${segment.label}: ${segment.minutes} min`
+      )}"></span>`;
+    })
+    .join("");
+
+  allocationLegendEl.className = "allocation-legend";
+  allocationLegendEl.innerHTML = segments
+    .map((segment) => {
+      const percent = Math.round((segment.minutes / layoverMinutes) * 100);
+      return `
+        <p>
+          <i class="allocation-dot ${segment.key}" aria-hidden="true"></i>
+          <strong>${escapeHtml(segment.label)}</strong>
+          <span>${escapeHtml(`${segment.minutes} min (${percent}%)`)}</span>
+        </p>
       `;
     })
     .join("");
@@ -805,69 +1091,11 @@ function focusCandidate(index) {
   marker.openPopup();
 }
 
-function buildPlanBrief(data) {
-  const arrivalValue = lastRequestPayload?.arrivalTime || data.request?.arrivalTime;
-  const recommendation = data.map?.selectedPoi
-    ? `${data.map.selectedPoi.name} (${data.map.selectedPoi.category || "poi"})`
-    : `Stay at ${data.airport.code}`;
-  const lines = [
-    "LayoverPlus Plan Brief",
-    `Airport: ${data.request.airportCode}`,
-    `Connection: ${data.request.connectionType}`,
-  ];
-  if (arrivalValue) {
-    lines.push(`Arrival: ${formatDateTime(arrivalValue)}`);
-  }
-  lines.push(
-    `Departure: ${formatDateTime(data.request.departureTime)}`,
-    `Risk: ${data.feasibility.riskLabel}`,
-    `Score: ${data.feasibility.score}/100`,
-    `Slack: ${formatMinutes(data.feasibility.slackMinutes)}`,
-    `Recommendation: ${recommendation}`,
-    `Narrative: ${data.narrative}`
-  );
-  return lines.join("\n");
-}
-
-async function copyPlanBrief() {
-  if (!lastPlanData) {
-    setStatus("Generate a plan before copying a brief.", "error");
-    return;
-  }
-  try {
-    await navigator.clipboard.writeText(buildPlanBrief(lastPlanData));
-    setStatus("Plan brief copied to clipboard.", "success");
-  } catch (_error) {
-    setStatus("Clipboard write failed. Copy manually from the summary card.", "error");
-  }
-}
-
-function exportPlanJson() {
-  if (!lastPlanData) {
-    setStatus("Generate a plan before exporting.", "error");
-    return;
-  }
-
-  const blob = new Blob([JSON.stringify(lastPlanData, null, 2)], {
-    type: "application/json",
-  });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  const timestamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
-  link.href = url;
-  link.download = `layoverplus-plan-${lastPlanData.request.airportCode}-${timestamp}.json`;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-  setStatus("Plan JSON exported.", "success");
-}
-
 function setNextStepFromPlan(data) {
   const risk = data.feasibility?.riskLabel || "Unknown";
   if (risk === "Low") {
     setNextStep({
-      text: "Route looks healthy. Confirm the map path and then copy your brief.",
+      text: "Route looks healthy. Confirm your path on the map before leaving the airport.",
       label: "Open map",
       action: "map",
       tone: "good",
@@ -891,15 +1119,235 @@ function setNextStepFromPlan(data) {
   });
 }
 
+function getFlightPayloadFromState() {
+  if (!lastRequestPayload && !lastPlanData) {
+    return null;
+  }
+  const request = lastRequestPayload || lastPlanData.request || {};
+  return {
+    airportCode: request.airportCode,
+    arrivalTime: request.arrivalTime,
+    departureTime: request.departureTime,
+    connectionType: request.connectionType,
+    airlineCode: request.airlineCode,
+    flightNumber: request.flightNumber,
+    sessionKey,
+  };
+}
+
+function renderSharePreview(data) {
+  if (!sharePreviewEl) {
+    return;
+  }
+  const stopName = data.map?.selectedPoi?.name
+    ? data.map.selectedPoi.name
+    : `${data.airport.code} terminal`;
+  const risk = data.feasibility?.riskLabel || "Unknown";
+  const score = data.feasibility?.score ?? "-";
+  const slack = data.feasibility?.slackMinutes ?? 0;
+  const profile = data.request?.riskProfile || "balanced";
+  const strategy = data.request?.strategyPack || "standard";
+  sharePreviewEl.textContent = [
+    `LayoverPlus plan: ${risk}-risk recommendation at ${data.request?.airportCode}.`,
+    `Stop: ${stopName}.`,
+    `Score ${score}/100 with ${slack} min slack.`,
+    `Profile ${profile}, strategy ${strategy}.`,
+  ].join(" ");
+}
+
+function updateActionCenter(data) {
+  if (!openAirportMapBtn || !openRideLinkBtn) {
+    return;
+  }
+
+  const airportName = data.airport?.name || data.request?.airportCode || "airport";
+  const airportLink = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(airportName)}`;
+  openAirportMapBtn.dataset.href = airportLink;
+  openAirportMapBtn.disabled = false;
+
+  const selectedPoi = data.map?.selectedPoi;
+  if (!selectedPoi) {
+    openRideLinkBtn.disabled = true;
+    openRideLinkBtn.dataset.href = "";
+    return;
+  }
+
+  const destinationLabel = `${selectedPoi.name} ${selectedPoi.address || ""}`.trim();
+  const rideLink = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destinationLabel)}`;
+  openRideLinkBtn.disabled = false;
+  openRideLinkBtn.dataset.href = rideLink;
+}
+
+function renderReplanHistory(entries = []) {
+  if (!replanHistoryEl) {
+    return;
+  }
+  if (!entries.length) {
+    replanHistoryEl.className = "history-list empty";
+    replanHistoryEl.textContent = "No replan events yet.";
+    return;
+  }
+  replanHistoryEl.className = "history-list";
+  replanHistoryEl.innerHTML = entries
+    .map((entry) => {
+      const severity = entry.delayMinutes >= 20 || entry.trigger === "boarding_soon" ? "high" : "medium";
+      return `
+        <article class="history-item ${severity}">
+          <div class="history-head">
+            <strong>${escapeHtml(entry.trigger || "trigger")}</strong>
+            <span class="history-time">${escapeHtml(formatDateTime(entry.at))}</span>
+          </div>
+          <p>${escapeHtml(entry.reason || "Replan signal captured.")}</p>
+          <p>${escapeHtml(
+            `Status ${entry.statusLabel || "-"} · Gate ${entry.gate || "-"} · Delay ${entry.delayMinutes ?? 0} min`
+          )}</p>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function renderFlightStatus(flight) {
+  if (!flightBadgeEl || !flightStatusLineEl) {
+    return;
+  }
+  if (!flight || !flight.usedTicketContext) {
+    flightBadgeEl.textContent = "No context";
+    flightBadgeEl.className = "risk-pill neutral";
+    flightStatusLineEl.textContent = "Add flight code + number to enable status signals.";
+    flightAirlineEl.textContent = "-";
+    flightGateEl.textContent = "-";
+    flightDelayEl.textContent = "-";
+    flightEtaEl.textContent = "-";
+    flightUpdatedEl.textContent = "No flight status pulled yet.";
+    flightEventsEl.className = "event-list empty";
+    flightEventsEl.textContent = "No active flight alerts.";
+    return;
+  }
+
+  const statusToTone = {
+    "on-time": "low",
+    delayed: "medium",
+    "final-call": "high",
+    boarding: "high",
+    departed: "high",
+  };
+  const tone = statusToTone[flight.statusCode] || "neutral";
+  flightBadgeEl.textContent = flight.statusLabel || "Unknown";
+  flightBadgeEl.className = `risk-pill ${tone}`;
+  flightStatusLineEl.textContent = `${flight.airlineCode}${flight.flightNumber} · ${flight.statusLabel}`;
+  flightAirlineEl.textContent = flight.airlineName || flight.airlineCode || "-";
+  flightGateEl.textContent = flight.gate || "-";
+  flightDelayEl.textContent = `${flight.delayMinutes || 0} min`;
+  flightEtaEl.textContent = Number.isFinite(flight.minutesToDeparture)
+    ? `${flight.minutesToDeparture} min`
+    : "-";
+  flightUpdatedEl.textContent = `Updated ${formatDateTime(flight.updatedAt)}`;
+
+  if (!Array.isArray(flight.events) || !flight.events.length) {
+    flightEventsEl.className = "event-list empty";
+    flightEventsEl.textContent = "No active flight alerts.";
+    return;
+  }
+
+  flightEventsEl.className = "event-list";
+  flightEventsEl.innerHTML = flight.events
+    .map((event) => {
+      const severity = event.severity || "medium";
+      return `
+        <article class="event-item ${severity}">
+          <div class="event-head">
+            <strong>${escapeHtml(event.type || "event")}</strong>
+            <span class="event-time">${escapeHtml(formatDateTime(flight.updatedAt))}</span>
+          </div>
+          <p>${escapeHtml(event.message || "No event details.")}</p>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+async function maybeAutoReplan(flight) {
+  if (!autoReplanInput?.checked || !flight?.replan?.recommended || replanInFlight) {
+    return;
+  }
+  const signature = [
+    flight.replan.trigger,
+    flight.replan.suggestedDepartureTime,
+    flight.gate || "-",
+    flight.delayMinutes || 0,
+  ].join("|");
+  if (signature === lastAutoReplanSignature) {
+    return;
+  }
+  lastAutoReplanSignature = signature;
+
+  const suggested = new Date(flight.replan.suggestedDepartureTime);
+  if (!Number.isNaN(suggested.getTime()) && suggested.getTime() > Date.now()) {
+    departureInput.value = toDatetimeLocalValue(suggested);
+    updatePlannerChecklist();
+  }
+
+  replanInFlight = true;
+  setStatus(`Auto-replan: ${flight.replan.reason}`, "info");
+  await sendEvent("auto_replan_triggered", "results", {
+    trigger: flight.replan.trigger,
+    delayMinutes: flight.delayMinutes,
+  });
+  form.requestSubmit();
+}
+
+async function fetchFlightStatus({ triggerAutoReplan = false } = {}) {
+  const payload = getFlightPayloadFromState();
+  if (!payload?.airportCode || !payload?.departureTime) {
+    return;
+  }
+  try {
+    const response = await fetch("/api/flight-status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "Failed to fetch flight status.");
+    }
+    sessionKey = data.sessionKey || sessionKey;
+    lastFlightSnapshot = data.flight || null;
+    renderFlightStatus(data.flight);
+    renderReplanHistory(data.replanHistory || []);
+    if (triggerAutoReplan) {
+      await maybeAutoReplan(data.flight);
+    }
+  } catch (error) {
+    flightStatusLineEl.textContent = `Flight status unavailable: ${error.message}`;
+  }
+}
+
+function stopFlightPolling() {
+  if (flightPollTimer) {
+    clearInterval(flightPollTimer);
+    flightPollTimer = null;
+  }
+}
+
+function startFlightPolling() {
+  stopFlightPolling();
+  flightPollTimer = setInterval(() => {
+    fetchFlightStatus({ triggerAutoReplan: true }).catch(() => {});
+  }, FLIGHT_POLL_INTERVAL_MS);
+}
+
 function updateSummary(data, payload = null) {
   lastPlanData = data;
   if (payload) {
     lastRequestPayload = payload;
   }
-  setPlanActionState(true);
+  sessionKey = data.session?.key || sessionKey;
   renderDecisionBanner(data);
   renderDecisionWhy(data);
   renderScoreBreakdown(data);
+  renderAllocation(data);
   setNextStepFromPlan(data);
   updateTravelFact(data);
   const aiTitle = data.ai?.title && data.ai.title.trim();
@@ -924,25 +1372,50 @@ function updateSummary(data, payload = null) {
   const requestSegments = [
     `Request: ${data.request.airportCode}`,
     data.request.connectionType,
+    `Profile ${data.request.riskProfile || "balanced"}`,
+    `Pack ${data.request.strategyPack || "standard"}`,
   ];
   const arrivalValue = lastRequestPayload?.arrivalTime || data.request?.arrivalTime;
+  const airlineCode = lastRequestPayload?.airlineCode || data.request?.airlineCode;
+  const flightNumber = lastRequestPayload?.flightNumber || data.request?.flightNumber;
   if (arrivalValue) {
     requestSegments.push(`Arrival ${formatDateTime(arrivalValue)}`);
   }
   requestSegments.push(`Departure ${formatDateTime(data.request.departureTime)}`);
+  if (airlineCode || flightNumber) {
+    requestSegments.push(`Flight ${(airlineCode || "") + (flightNumber || "")}`);
+  }
+  if (data.observability?.generatedInMs != null) {
+    requestSegments.push(`Plan ${data.observability.generatedInMs} ms`);
+  }
   requestMetaEl.textContent = requestSegments.join(" · ");
+  renderSharePreview(data);
+  updateActionCenter(data);
+  renderFlightStatus(data.flight || null);
+  renderReplanHistory(data.replanHistory || []);
 
   renderSafetyChecklist(data);
   renderSchedule(data.schedule || []);
   renderSelectedPoi(data.map?.selectedPoi || null);
   renderCandidates(data.map?.candidates || []);
   renderMap(data.map);
+  setTabLabels({
+    timelineCount: Array.isArray(data.schedule) ? data.schedule.length : 0,
+    alternativesCount: Array.isArray(data.map?.candidates) ? data.map.candidates.length : 0,
+  });
 
   selectedCandidateIndex = data.map?.candidates?.length ? 0 : -1;
   if (selectedCandidateIndex === 0) {
     renderCandidates(data.map.candidates);
   }
   setActiveTab("decision");
+  sendEvent("plan_generated", "results", {
+    airportCode: data.request?.airportCode,
+    riskLabel: data.feasibility?.riskLabel,
+    score: data.feasibility?.score,
+    strategyPack: data.request?.strategyPack,
+    riskProfile: data.request?.riskProfile,
+  });
 }
 
 async function loadConfig() {
@@ -974,6 +1447,7 @@ function getPayloadFromForm() {
   const departureValue = formData.get("departureTime");
   const arrivalDate = new Date(arrivalValue);
   const departureDate = new Date(departureValue);
+  const flightContext = getFlightContext();
 
   if (!arrivalValue || Number.isNaN(arrivalDate.getTime())) {
     throw new Error("Choose a valid arrival time.");
@@ -987,21 +1461,43 @@ function getPayloadFromForm() {
   if (departureDate.getTime() <= Date.now()) {
     throw new Error("Departure time must be in the future.");
   }
+  if (!trustAcknowledgedInput?.checked) {
+    throw new Error("Confirm guidance acknowledgment before generating a plan.");
+  }
+
+  if (airlineCodeInput) {
+    airlineCodeInput.value = flightContext.airlineCode;
+  }
+  if (flightNumberInput) {
+    flightNumberInput.value = flightContext.flightNumber;
+  }
 
   return {
     airportCode: formData.get("airportCode"),
     arrivalTime: arrivalValue,
     departureTime: departureValue,
     connectionType: formData.get("connectionType"),
+    riskProfile: normalizeRiskProfile(formData.get("riskProfile")),
+    strategyPack: normalizeStrategyPack(selectedStrategyPack),
     interests: formData.getAll("interests"),
+    airlineCode: flightContext.airlineCode || null,
+    flightNumber: flightContext.flightNumber || null,
+    trustAcknowledged: Boolean(trustAcknowledgedInput?.checked),
+    sessionKey,
   };
 }
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   setStatus("Building plan...", "info");
+  startBuildProgressTicker();
   submitButton.disabled = true;
   setLoadingState(true);
+  await sendEvent("plan_submit", "planner", {
+    airportCode: form.elements.airportCode.value,
+    riskProfile: normalizeRiskProfile(form.elements.riskProfile?.value),
+    strategyPack: selectedStrategyPack,
+  });
 
   try {
     const payload = getPayloadFromForm();
@@ -1023,13 +1519,20 @@ form.addEventListener("submit", async (event) => {
     }
 
     updateSummary(data, payload);
+    await fetchFlightStatus({ triggerAutoReplan: false });
+    startFlightPolling();
     resultsTopEl.scrollIntoView({ behavior: "smooth", block: "start" });
     setStatus("Plan generated.", "success");
+    setBuildProgressMessage("Plan ready. Open tabs to inspect details.");
   } catch (error) {
     setStatus(error.message, "error");
+    setBuildProgressMessage("Generation stopped. Adjust inputs and retry.");
+    await sendEvent("plan_submit_failed", "planner", { message: error.message });
   } finally {
+    stopBuildProgressTicker();
     submitButton.disabled = false;
     setLoadingState(false);
+    replanInFlight = false;
   }
 });
 
@@ -1038,30 +1541,32 @@ resetPlannerBtn.addEventListener("click", () => {
   setDefaultDepartureTime();
   setActivePreset(5);
   form.elements.connectionType.value = "domestic";
+  if (form.elements.riskProfile) {
+    form.elements.riskProfile.value = "balanced";
+  }
+  setStrategyPack("standard", { emitEvent: false });
+  if (autoReplanInput) {
+    autoReplanInput.checked = true;
+  }
+  if (trustAcknowledgedInput) {
+    trustAcknowledgedInput.checked = false;
+  }
   const interests = Array.from(form.querySelectorAll("input[name='interests']"));
   interests.forEach((checkbox, index) => {
     checkbox.checked = index < 2;
   });
+  if (airlineCodeInput) {
+    airlineCodeInput.value = "";
+  }
+  if (flightNumberInput) {
+    flightNumberInput.value = "";
+  }
+  updateTicketLinks();
   updatePlannerChecklist();
   resetResultsView();
   setStatus("Planner reset.", "info");
+  sendEvent("planner_reset", "planner", {});
 });
-
-copyBriefBtn.addEventListener("click", () => {
-  copyPlanBrief().catch(() => {
-    setStatus("Could not copy the plan brief.", "error");
-  });
-});
-
-exportPlanBtn.addEventListener("click", () => {
-  exportPlanJson();
-});
-
-if (togglePresentationBtn) {
-  togglePresentationBtn.addEventListener("click", () => {
-    setPresentationMode(!presentationModeEnabled);
-  });
-}
 
 if (nextStepBtn) {
   nextStepBtn.addEventListener("click", () => {
@@ -1128,21 +1633,144 @@ for (const button of scenarioButtons) {
   });
 }
 
+for (const button of packButtons) {
+  button.addEventListener("click", () => {
+    const pack = button.dataset.pack;
+    if (!pack) {
+      return;
+    }
+    setStrategyPack(pack);
+    updatePlannerChecklist();
+  });
+}
+
+if (riskProfileSelect) {
+  riskProfileSelect.addEventListener("change", () => {
+    const profile = normalizeRiskProfile(riskProfileSelect.value);
+    sendEvent("risk_profile_selected", "planner", { riskProfile: profile });
+  });
+}
+
+if (autoReplanInput) {
+  autoReplanInput.addEventListener("change", () => {
+    sendEvent("auto_replan_toggled", "planner", { enabled: autoReplanInput.checked });
+  });
+}
+
+if (openAirportMapBtn) {
+  openAirportMapBtn.addEventListener("click", () => {
+    const url = openAirportMapBtn.dataset.href;
+    if (!url) {
+      return;
+    }
+    window.open(url, "_blank", "noopener,noreferrer");
+    sendEvent("action_center_click", "results", { action: "airport_map" });
+  });
+}
+
+if (openRideLinkBtn) {
+  openRideLinkBtn.addEventListener("click", () => {
+    const url = openRideLinkBtn.dataset.href;
+    if (!url) {
+      return;
+    }
+    window.open(url, "_blank", "noopener,noreferrer");
+    sendEvent("action_center_click", "results", { action: "ride_estimate" });
+  });
+}
+
+if (toggleShareCardBtn && shareCardEl) {
+  toggleShareCardBtn.addEventListener("click", () => {
+    shareCardEl.classList.toggle("hidden");
+    toggleShareCardBtn.textContent = shareCardEl.classList.contains("hidden")
+      ? "Show share card"
+      : "Hide share card";
+    sendEvent("action_center_click", "results", {
+      action: shareCardEl.classList.contains("hidden") ? "hide_share_card" : "show_share_card",
+    });
+  });
+}
+
+for (const button of feedbackButtons) {
+  button.addEventListener("click", () => {
+    const score = Number(button.dataset.score);
+    if (!Number.isFinite(score)) {
+      return;
+    }
+    selectedFeedbackScore = score;
+    feedbackButtons.forEach((item) => {
+      item.classList.toggle("active", item === button);
+    });
+    if (feedbackStatusEl) {
+      feedbackStatusEl.textContent = `Selected rating: ${score}/5`;
+      feedbackStatusEl.classList.remove("warn");
+    }
+  });
+}
+
+if (feedbackSubmitBtn) {
+  feedbackSubmitBtn.addEventListener("click", async () => {
+    if (!selectedFeedbackScore) {
+      feedbackStatusEl.textContent = "Choose a rating before sending feedback.";
+      feedbackStatusEl.classList.add("warn");
+      return;
+    }
+    if (!lastPlanData) {
+      feedbackStatusEl.textContent = "Generate a plan before sending feedback.";
+      feedbackStatusEl.classList.add("warn");
+      return;
+    }
+    try {
+      const response = await fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          score: selectedFeedbackScore,
+          sentiment: selectedFeedbackScore >= 4 ? "positive" : selectedFeedbackScore <= 2 ? "negative" : "neutral",
+          comment: feedbackCommentInput?.value || "",
+          sessionKey,
+          airportCode: lastPlanData.request?.airportCode,
+          riskLabel: lastPlanData.feasibility?.riskLabel,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "Feedback submission failed.");
+      }
+      feedbackStatusEl.textContent = `Feedback sent (${selectedFeedbackScore}/5). Thank you.`;
+      feedbackStatusEl.classList.remove("warn");
+      await sendEvent("feedback_submitted", "results", { score: selectedFeedbackScore });
+    } catch (error) {
+      feedbackStatusEl.textContent = error.message;
+      feedbackStatusEl.classList.add("warn");
+    }
+  });
+}
+
 form.addEventListener("change", () => {
   updatePlannerChecklist();
 });
 
 form.addEventListener("input", () => {
   updatePlannerChecklist();
+  updateTicketLinks();
+  if (buildProgressTimer == null) {
+    setBuildProgressMessage("");
+  }
 });
 
 setDefaultArrivalTime();
 setDefaultDepartureTime();
 setActivePreset(5);
+if (riskProfileSelect) {
+  riskProfileSelect.value = "balanced";
+}
+setStrategyPack("standard", { emitEvent: false });
+setTabLabels();
+updateTicketLinks();
 updatePlannerChecklist();
 initMap();
 setActiveTab(activeTab);
-setPresentationMode(false);
 resetResultsView();
 Promise.all([checkApiHealth(), loadConfig()]).catch((error) => {
   setStatus(`Failed to load configuration: ${error.message}`, "error");
@@ -1151,3 +1779,13 @@ Promise.all([checkApiHealth(), loadConfig()]).catch((error) => {
 setInterval(() => {
   checkApiHealth().catch(() => {});
 }, 60000);
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && lastPlanData) {
+    fetchFlightStatus({ triggerAutoReplan: true }).catch(() => {});
+  }
+});
+
+window.addEventListener("beforeunload", () => {
+  stopFlightPolling();
+});
