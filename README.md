@@ -45,7 +45,9 @@ Travelers often remain in the airport during layovers because they cannot reliab
 
 ### Frontend
 
-* Vanilla HTML/CSS/JavaScript prototype
+* React + Vite
+* React Router
+* Framer Motion
 * Leaflet map UI
 
 ### Backend
@@ -116,13 +118,33 @@ Travelers often remain in the airport during layovers because they cannot reliab
 ```bash
 # Install dependencies
 npm install
-
-# Start the server
-npm start
 ```
 
-Open your browser at:
-👉 http://localhost:3000
+### Local Development
+
+Run backend and frontend in separate terminals:
+
+```bash
+# Terminal 1 (API server)
+npm run dev:server
+
+# Terminal 2 (Vite frontend)
+npm run dev:client
+```
+
+Open:
+- Frontend: `http://localhost:5173`
+- API server: `http://localhost:3000`
+
+### Production-style Run
+
+```bash
+# Build frontend assets
+npm run build
+
+# Serve built frontend + API from Express
+npm start
+```
 
 ### Enable AI Generation
 

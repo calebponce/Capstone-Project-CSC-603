@@ -1,0 +1,16 @@
+{
+  "name": "LayoverPlus",
+  "short_name": "LayoverPlus",
+  "description": "Risk-aware AI micro-itineraries for airport layovers",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f5efe4",
+  "theme_color": "#146b61",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✈️</text></svg>",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

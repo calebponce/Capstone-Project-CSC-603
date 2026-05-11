@@ -1,12 +1,18 @@
 const { loadEnvFile } = require("./src/config/env");
 const express = require("express");
+const { signup, login, verifyToken, users } = require("./src/server/auth");
+const fs = require("fs");
 const path = require("path");
 const pkg = require("./package.json");
-const {
-  AIRPORTS,
-  INTEREST_CONFIG,
-  getAirportConfig,
-} = require("./src/config/airports");
+const helmet = require("helmet");
+const cors = require("cors");
+const rateLimit = require("express-rate-limit");
+const pinoHttp = require("pino-http");
+const logger = require("./src/utils/logger");
+const errorHandler = require("./src/middleware/errorHandler");
+const { planSchema } = require("./src/schema/planSchema");
+const { flightSchema } = require("./src/schema/flightSchema");
+const { AIRPORTS, INTEREST_CONFIG, getAirportConfig } = require("./src/config/airports");
 const { buildLayoverPlan } = require("./src/services/itineraryService");
 const { getFlightStatus } = require("./src/services/flightService");
 const { getMapsRuntimeStats } = require("./src/services/mapsService");
@@ -16,6 +22,9 @@ loadEnvFile();
 const app = express();
 const port = process.env.PORT || 3000;
 const host = process.env.HOST || "127.0.0.1";
+const distPath = path.join(__dirname, "dist");
+const publicPath = path.join(__dirname, "public");
+const hasClientBuild = fs.existsSync(path.join(distPath, "index.html"));
 const MAX_FEEDBACK_ITEMS = 240;
 const MAX_EVENT_ITEMS = 500;
 const MAX_REPLAN_HISTORY_ITEMS = 30;
@@ -106,6 +115,28 @@ function sanitizeFreeText(value, maxLength = 320) {
   return value.trim().slice(0, maxLength);
 }
 
+function sanitizePreferredPoi(preferredPoiInput) {
+  if (!preferredPoiInput || typeof preferredPoiInput !== "object") {
+    return null;
+  }
+  const name = sanitizeFreeText(preferredPoiInput.name, 120);
+  const lat = Number(preferredPoiInput.lat);
+  const lon = Number(preferredPoiInput.lon);
+  if (!name || !Number.isFinite(lat) || !Number.isFinite(lon)) {
+    return null;
+  }
+  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+    return null;
+  }
+  return {
+    name,
+    lat,
+    lon,
+    category: sanitizeFreeText(preferredPoiInput.category, 80) || null,
+    address: sanitizeFreeText(preferredPoiInput.address, 180) || null,
+  };
+}
+
 function appendReplanHistory(sessionKey, entry) {
   if (!sessionKey) {
     return [];
@@ -134,8 +165,30 @@ function sendError(res, statusCode, message, details) {
   });
 }
 
+// ---- Security & Hardening Middleware ----
+app.use(
+  helmet({
+    contentSecurityPolicy: false, // Disabling CSP for now to prevent breaking existing inline scripts/styles if any
+  })
+);
+app.use(cors());
+
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per windowMs
+  message: { error: "Too many requests, please try again later." },
+});
+app.use("/api/", apiLimiter);
+
+// ---- Logging Middleware ----
+app.use(pinoHttp({ logger }));
+
+// ---- Body Parsers ----
 app.use(express.json());
-app.use(express.static(path.join(__dirname, "public")));
+if (hasClientBuild) {
+  app.use(express.static(distPath));
+}
+app.use(express.static(publicPath));
 
 app.get("/api/health", (_req, res) => {
   markApiRequest("health");
@@ -146,6 +199,39 @@ app.get("/api/health", (_req, res) => {
     timestamp: new Date().toISOString(),
     uptimeSeconds: Math.round(process.uptime()),
   });
+});
+
+// ---- Auth Routes ----
+app.post("/api/signup", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const token = await signup(email, password);
+    res.json({ token, email });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const token = await login(email, password);
+    res.json({ token, email });
+  } catch (err) {
+    res.status(401).json({ error: err.message });
+  }
+});
+
+app.get("/api/vault", (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  const decoded = verifyToken(authHeader.split(" ")[1]);
+  if (!decoded) return res.status(401).json({ error: "Invalid token" });
+  
+  const user = users.find(u => u.id === decoded.id);
+  res.json({ savedPlans: user?.savedPlans || [] });
 });
 
 app.get("/api/config", (_req, res) => {
@@ -164,9 +250,7 @@ app.get("/api/usage", (_req, res) => {
   markApiRequest("usage");
   const successfulPlans = Math.max(0, apiUsage.plan - apiUsage.planErrors);
   const planAverageDurationMs =
-    successfulPlans > 0
-      ? Math.round(apiUsage.planTotalDurationMs / successfulPlans)
-      : null;
+    successfulPlans > 0 ? Math.round(apiUsage.planTotalDurationMs / successfulPlans) : null;
   const mapsRuntime = getMapsRuntimeStats();
 
   return res.json({
@@ -252,76 +336,68 @@ app.post("/api/feedback", (req, res) => {
   });
 });
 
-app.post("/api/flight-status", (req, res) => {
+app.post("/api/flight-status", (req, res, next) => {
   markApiRequest("flightStatus");
-  const {
-    airportCode,
-    arrivalTime,
-    departureTime,
-    airlineCode,
-    flightNumber,
-    connectionType,
-    sessionKey: sessionKeyInput,
-  } = req.body || {};
-
-  if (!airportCode || !departureTime) {
-    return sendError(res, 400, "airportCode and departureTime are required.");
-  }
-
-  const departureDate = new Date(departureTime);
-  if (Number.isNaN(departureDate.getTime())) {
-    return sendError(res, 400, "departureTime must be a valid date/time.");
-  }
-
-  const airport = getAirportConfig(airportCode);
-  if (!airport) {
-    return sendError(res, 400, `Unsupported airport code: ${airportCode}`);
-  }
-
-  const arrivalDate = arrivalTime ? new Date(arrivalTime) : null;
-  const normalizedAirlineCode = normalizeTicketField(airlineCode, { maxLength: 3 }) || null;
-  const normalizedFlightNumber = normalizeTicketField(flightNumber, { maxLength: 6 }) || null;
-  const sessionKey =
-    sanitizeFreeText(sessionKeyInput, 180) ||
-    buildSessionKey({
+  try {
+    const validatedData = flightSchema.parse(req.body || {});
+    const {
       airportCode,
-      arrivalTime: arrivalDate || new Date(),
-      departureTime: departureDate,
+      arrivalTime,
+      departureTime,
+      airlineCode,
+      flightNumber,
+      connectionType,
+      sessionKey: sessionKeyInput,
+    } = validatedData;
+
+    const airport = getAirportConfig(airportCode);
+    const arrivalDate = arrivalTime ? new Date(arrivalTime) : null;
+    const normalizedAirlineCode = normalizeTicketField(airlineCode, { maxLength: 3 }) || null;
+    const normalizedFlightNumber = normalizeTicketField(flightNumber, { maxLength: 6 }) || null;
+    const sessionKey =
+      sanitizeFreeText(sessionKeyInput, 180) ||
+      buildSessionKey({
+        airportCode,
+        arrivalTime: arrivalDate || new Date(),
+        departureTime: new Date(departureTime),
+        airlineCode: normalizedAirlineCode,
+        flightNumber: normalizedFlightNumber,
+        connectionType,
+      });
+
+    const flight = getFlightStatus({
       airlineCode: normalizedAirlineCode,
       flightNumber: normalizedFlightNumber,
-      connectionType,
+      airportCode: airport.code,
+      arrivalTime: arrivalDate || new Date(),
+      departureTime: new Date(departureTime),
     });
 
-  const flight = getFlightStatus({
-    airlineCode: normalizedAirlineCode,
-    flightNumber: normalizedFlightNumber,
-    airportCode: airport.code,
-    arrivalTime: arrivalDate || new Date(),
-    departureTime: departureDate,
-  });
+    if (flight.replan?.recommended) {
+      apiUsage.planAutoReplans += 1;
+      appendReplanHistory(sessionKey, {
+        source: "flight-status",
+        trigger: flight.replan.trigger,
+        statusLabel: flight.statusLabel,
+        gate: flight.gate,
+        delayMinutes: flight.delayMinutes,
+        reason: flight.replan.reason,
+        at: new Date().toISOString(),
+      });
+    }
 
-  if (flight.replan?.recommended) {
-    apiUsage.planAutoReplans += 1;
-    appendReplanHistory(sessionKey, {
-      source: "flight-status",
-      trigger: flight.replan.trigger,
-      statusLabel: flight.statusLabel,
-      gate: flight.gate,
-      delayMinutes: flight.delayMinutes,
-      reason: flight.replan.reason,
-      at: new Date().toISOString(),
+    return res.json({
+      meta: {
+        generatedAt: new Date().toISOString(),
+        apiVersion: pkg.version,
+      },
+      sessionKey,
+      flight,
+      replanHistory: getReplanHistory(sessionKey, 12),
     });
+  } catch (error) {
+    next(error);
   }
-
-  return res.json({
-    meta: {
-      generatedAt: new Date().toISOString(),
-      apiVersion: pkg.version,
-    },
-    sessionKey,
-    flight,
-    replanHistory: getReplanHistory(sessionKey, 12),
-  });
 });
 
 app.get("/api/replan-history", (req, res) => {
@@ -341,7 +417,7 @@ app.get("/api/replan-history", (req, res) => {
   });
 });
 
-app.post("/api/plan", async (req, res) => {
+app.post("/api/plan", async (req, res, next) => {
   markApiRequest("plan");
   const startedAt = Date.now();
   const finishPlanUsage = ({ status, error = null, includeDurationInAverage = false }) => {
@@ -355,17 +431,8 @@ app.post("/api/plan", async (req, res) => {
     }
   };
 
-  const sendPlanError = (statusCode, message, details) => {
-    apiUsage.planErrors += 1;
-    finishPlanUsage({
-      status: statusCode < 500 ? "failed-validation" : "failed-server",
-      error: message,
-      includeDurationInAverage: false,
-    });
-    return sendError(res, statusCode, message, details);
-  };
-
   try {
+    const validatedData = planSchema.parse(req.body || {});
     const {
       airportCode,
       arrivalTime,
@@ -376,48 +443,15 @@ app.post("/api/plan", async (req, res) => {
       flightNumber,
       riskProfile,
       strategyPack,
+      preferredPoiName,
+      preferredPoi,
       trustAcknowledged,
       sessionKey: sessionKeyInput,
-    } = req.body || {};
-
-    if (!airportCode || !arrivalTime || !departureTime || !connectionType) {
-      return sendPlanError(
-        400,
-        "airportCode, arrivalTime, departureTime, and connectionType are required."
-      );
-    }
-    if (trustAcknowledged !== true) {
-      return sendPlanError(
-        400,
-        "trustAcknowledged must be true before generating a plan."
-      );
-    }
+    } = validatedData;
 
     const airport = getAirportConfig(airportCode);
-    if (!airport) {
-      return sendPlanError(400, `Unsupported airport code: ${airportCode}`);
-    }
-
-    if (!["domestic", "international"].includes(connectionType)) {
-      return sendPlanError(400, "connectionType must be domestic or international.");
-    }
-
     const departureDate = new Date(departureTime);
-    if (Number.isNaN(departureDate.getTime())) {
-      return sendPlanError(400, "departureTime must be a valid date/time.");
-    }
-
-    if (departureDate.getTime() <= Date.now()) {
-      return sendPlanError(400, "departureTime must be in the future.");
-    }
-
     const arrivalDate = new Date(arrivalTime);
-    if (Number.isNaN(arrivalDate.getTime())) {
-      return sendPlanError(400, "arrivalTime must be a valid date/time.");
-    }
-    if (arrivalDate.getTime() >= departureDate.getTime()) {
-      return sendPlanError(400, "arrivalTime must be before departureTime.");
-    }
 
     const normalizedInterests = Array.isArray(interests)
       ? interests.filter((item) => INTEREST_CONFIG[item])
@@ -426,6 +460,8 @@ app.post("/api/plan", async (req, res) => {
     const normalizedFlightNumber = normalizeTicketField(flightNumber, { maxLength: 6 }) || null;
     const normalizedRiskProfile = normalizeRiskProfile(riskProfile);
     const normalizedStrategyPack = normalizeStrategyPack(strategyPack);
+    const normalizedPreferredPoiName = sanitizeFreeText(preferredPoiName, 120) || null;
+    const normalizedPreferredPoi = sanitizePreferredPoi(preferredPoi);
     const sessionKey =
       sanitizeFreeText(sessionKeyInput, 180) ||
       buildSessionKey({
@@ -447,6 +483,8 @@ app.post("/api/plan", async (req, res) => {
       strategyPack: normalizedStrategyPack,
       airlineCode: normalizedAirlineCode,
       flightNumber: normalizedFlightNumber,
+      preferredPoiName: normalizedPreferredPoiName,
+      preferredPoi: normalizedPreferredPoi,
     });
     const flight = getFlightStatus({
       airlineCode: normalizedAirlineCode,
@@ -475,7 +513,7 @@ app.post("/api/plan", async (req, res) => {
       error: null,
     });
 
-    return res.json({
+    const planResult = {
       meta: {
         generatedAt: new Date().toISOString(),
         apiVersion: pkg.version,
@@ -493,15 +531,49 @@ app.post("/api/plan", async (req, res) => {
         generatedInMs: Date.now() - startedAt,
         mapsRuntime: getMapsRuntimeStats(),
       },
-    });
+    };
+
+    // Save to Vault if requested and user is authenticated
+    if (req.body.saveToVault) {
+      const authHeader = req.headers.authorization;
+      if (authHeader && authHeader.startsWith("Bearer ")) {
+        const decoded = verifyToken(authHeader.split(" ")[1]);
+        if (decoded) {
+          const user = users.find(u => u.id === decoded.id);
+          if (user) {
+            user.savedPlans = user.savedPlans || [];
+            user.savedPlans.unshift({
+              id: Date.now(),
+              title: planResult.ai?.title || "Layover Plan",
+              airportCode: planResult.request.airportCode,
+              generatedAt: new Date().toISOString(),
+              plan: planResult
+            });
+            // Keep only last 20 plans
+            user.savedPlans = user.savedPlans.slice(0, 20);
+          }
+        }
+      }
+    }
+
+    return res.json(planResult);
   } catch (error) {
-    apiUsage.planErrors += 1;
-    finishPlanUsage({
-      status: "failed-server",
-      includeDurationInAverage: false,
-      error: error.message,
-    });
-    return sendError(res, 500, "Failed to build itinerary.", error.message);
+    if (error.name === "ZodError") {
+      apiUsage.planErrors += 1;
+      finishPlanUsage({
+        status: "failed-validation",
+        error: "Validation failed",
+        includeDurationInAverage: false,
+      });
+    } else {
+      apiUsage.planErrors += 1;
+      finishPlanUsage({
+        status: "failed-server",
+        error: error.message,
+        includeDurationInAverage: false,
+      });
+    }
+    next(error);
   }
 });
 
@@ -509,6 +581,22 @@ app.use("/api", (_req, res) => {
   return sendError(res, 404, "API route not found.");
 });
 
+if (hasClientBuild) {
+  app.get("*", (_req, res) => {
+    return res.sendFile(path.join(distPath, "index.html"));
+  });
+} else {
+  app.get("/", (_req, res) => {
+    return res.status(503).json({
+      error: "Client build not found.",
+      details: "Run `npm run build` for production or `npm run dev:client` for local frontend dev.",
+    });
+  });
+}
+
+// ---- Global Error Handler ----
+app.use(errorHandler);
+
 app.listen(port, host, () => {
-  console.log(`LayoverPlus running on http://${host}:${port}`);
+  logger.info(`LayoverPlus running on http://${host}:${port}`);
 });

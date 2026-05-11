@@ -74,6 +74,43 @@ function clampMinimum(value, minimum) {
   return Math.max(minimum, Math.round(value));
 }
 
+function normalizePoiName(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\u2019/g, "'")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function normalizeCoordinate(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function poiMatchesRequested(poi, requestedPoi) {
+  if (!poi || !requestedPoi) {
+    return false;
+  }
+
+  const sameName =
+    normalizePoiName(poi.name) &&
+    normalizePoiName(poi.name) === normalizePoiName(requestedPoi.name);
+  if (sameName) {
+    return true;
+  }
+
+  const poiLat = normalizeCoordinate(poi.lat);
+  const poiLon = normalizeCoordinate(poi.lon);
+  if (poiLat == null || poiLon == null) {
+    return false;
+  }
+  return (
+    Math.abs(poiLat - requestedPoi.lat) <= 0.001 &&
+    Math.abs(poiLon - requestedPoi.lon) <= 0.001
+  );
+}
+
 function calculateScoreComponents({
   slackMinutes,
   outboundMinutes,
@@ -107,12 +144,28 @@ function calculateScoreComponents({
   };
 }
 
-function buildNarrative({ airport, bestOption, connectionType, feasibility, interests }) {
-  if (!bestOption) {
+function buildNarrative({
+  airport,
+  selectedOption,
+  connectionType,
+  feasibility,
+  interests,
+  preferredPoiName,
+}) {
+  if (!selectedOption) {
     return `This ${connectionType} layover at ${airport.code} is too tight for a safe off-airport trip after applying processing time and return buffer rules. Staying inside the airport is the lower-risk option.`;
   }
 
-  return `For this ${connectionType} connection at ${airport.code}, the safest off-airport option is ${bestOption.poi.name}. The plan leaves the airport after a ${bestOption.processingMinutes}-minute processing window, spends about ${bestOption.dwellMinutes} minutes focused on ${summarizeInterests(interests)}, and returns with a ${bestOption.returnBufferMinutes}-minute safety buffer. The itinerary is rated ${feasibility.riskLabel.toLowerCase()} risk with a feasibility score of ${feasibility.score}/100.`;
+  const selectedPoiName = selectedOption.poi.name;
+  if (!feasibility.feasible) {
+    return `You selected ${selectedPoiName} for this ${connectionType} connection at ${airport.code}, but the current window rates this stop as high risk. The plan still leaves after a ${selectedOption.processingMinutes}-minute processing window and returns with a ${selectedOption.returnBufferMinutes}-minute safety buffer, but staying in-airport is safer unless your timing improves.`;
+  }
+
+  const selectedPrefix = preferredPoiName
+    ? `You selected ${selectedPoiName} for this ${connectionType} connection at ${airport.code}.`
+    : `For this ${connectionType} connection at ${airport.code}, ${selectedPoiName} is the top-ranked off-airport option.`;
+
+  return `${selectedPrefix} The plan leaves the airport after a ${selectedOption.processingMinutes}-minute processing window, spends about ${selectedOption.dwellMinutes} minutes focused on ${summarizeInterests(interests)}, and returns with a ${selectedOption.returnBufferMinutes}-minute safety buffer. The itinerary is rated ${feasibility.riskLabel.toLowerCase()} risk with a feasibility score of ${feasibility.score}/100.`;
 }
 
 function buildSchedule({ airport, departureTime, option }) {
@@ -178,6 +231,8 @@ async function buildLayoverPlan({
   strategyPack = "standard",
   airlineCode = null,
   flightNumber = null,
+  preferredPoiName = null,
+  preferredPoi = null,
 }) {
   const planStartTime = arrivalTime instanceof Date ? arrivalTime : new Date();
   const layoverMinutes = minutesBetween(planStartTime, departureTime);
@@ -211,6 +266,22 @@ async function buildLayoverPlan({
   });
 
   const availableTripMinutes = layoverMinutes - processingMinutes - returnBufferMinutes;
+  const requestedPreferredPoiName = preferredPoiName || preferredPoi?.name || null;
+  const normalizedPreferredPoiName = normalizePoiName(requestedPreferredPoiName);
+  const requestedPreferredPoi =
+    preferredPoi &&
+    typeof preferredPoi === "object" &&
+    normalizeCoordinate(preferredPoi.lat) != null &&
+    normalizeCoordinate(preferredPoi.lon) != null &&
+    normalizePoiName(preferredPoi.name)
+      ? {
+          name: String(preferredPoi.name || "").trim(),
+          lat: normalizeCoordinate(preferredPoi.lat),
+          lon: normalizeCoordinate(preferredPoi.lon),
+          category: preferredPoi.category || "poi",
+          address: preferredPoi.address || "",
+        }
+      : null;
 
   let pois = [];
   if (availableTripMinutes > 30) {
@@ -222,8 +293,21 @@ async function buildLayoverPlan({
     }
   }
 
+  const hasRequestedPreferredPoi = requestedPreferredPoi
+    ? pois.some((poi) => poiMatchesRequested(poi, requestedPreferredPoi))
+    : false;
+  if (requestedPreferredPoi && !hasRequestedPreferredPoi) {
+    pois = [requestedPreferredPoi, ...pois];
+  }
+  const prioritizedPois = requestedPreferredPoi
+    ? [
+        requestedPreferredPoi,
+        ...pois.filter((poi) => !poiMatchesRequested(poi, requestedPreferredPoi)),
+      ]
+    : pois;
+
   const enriched = [];
-  for (const poi of pois.slice(0, 12)) {
+  for (const poi of prioritizedPois.slice(0, 12)) {
     const outboundMinutes = await getRouteEstimateMinutes(
       { lat: airport.lat, lon: airport.lon },
       { lat: poi.lat, lon: poi.lon },
@@ -267,9 +351,17 @@ async function buildLayoverPlan({
     return b.dwellMinutes - a.dwellMinutes;
   });
 
-  const bestOption = enriched.find((item) => item.feasibility.feasible) || null;
-  const feasibility = bestOption
-    ? bestOption.feasibility
+  let preferredOption = normalizedPreferredPoiName
+    ? enriched.find((item) => normalizePoiName(item.poi.name) === normalizedPreferredPoiName) || null
+    : null;
+  if (!preferredOption && requestedPreferredPoi) {
+    preferredOption =
+      enriched.find((item) => poiMatchesRequested(item.poi, requestedPreferredPoi)) || null;
+  }
+  const bestFeasibleOption = enriched.find((item) => item.feasibility.feasible) || null;
+  const selectedOption = preferredOption || bestFeasibleOption;
+  const feasibility = selectedOption
+    ? selectedOption.feasibility
     : calculateFeasibility({
         layoverMinutes,
         outboundMinutes: 0,
@@ -280,24 +372,31 @@ async function buildLayoverPlan({
         maxTravelMinutesOneWay,
       });
 
-  const baseSchedule = bestOption ? buildSchedule({ airport, departureTime, option: bestOption }) : [];
+  const baseSchedule = selectedOption
+    ? buildSchedule({ airport, departureTime, option: selectedOption })
+    : [];
   const fallbackNarrative = buildNarrative({
     airport,
-    bestOption,
+    selectedOption,
     connectionType,
     feasibility,
     interests: effectiveInterests,
+    preferredPoiName: preferredOption ? requestedPreferredPoiName : null,
   });
-  const selectedPoi = bestOption
+  const selectedPoi = selectedOption
     ? {
-        name: bestOption.poi.name,
-        lat: bestOption.poi.lat,
-        lon: bestOption.poi.lon,
-        category: bestOption.poi.category,
-        address: bestOption.poi.address,
-        outboundMinutes: bestOption.outboundMinutes,
-        inboundMinutes: bestOption.inboundMinutes,
-        dwellMinutes: bestOption.dwellMinutes,
+        name: selectedOption.poi.name,
+        lat: selectedOption.poi.lat,
+        lon: selectedOption.poi.lon,
+        category: selectedOption.poi.category,
+        address: selectedOption.poi.address,
+        outboundMinutes: selectedOption.outboundMinutes,
+        inboundMinutes: selectedOption.inboundMinutes,
+        dwellMinutes: selectedOption.dwellMinutes,
+        score: selectedOption.feasibility.score,
+        riskLabel: selectedOption.feasibility.riskLabel,
+        feasible: selectedOption.feasibility.feasible,
+        slackMinutes: selectedOption.feasibility.slackMinutes,
       }
     : null;
   const summary = {
@@ -314,9 +413,9 @@ async function buildLayoverPlan({
   };
   const scoreComponents = calculateScoreComponents({
     slackMinutes: feasibility.slackMinutes,
-    outboundMinutes: bestOption?.outboundMinutes || 0,
-    inboundMinutes: bestOption?.inboundMinutes || 0,
-    dwellMinutes: bestOption?.dwellMinutes || 0,
+    outboundMinutes: selectedOption?.outboundMinutes || 0,
+    inboundMinutes: selectedOption?.inboundMinutes || 0,
+    dwellMinutes: selectedOption?.dwellMinutes || 0,
     maxTravelMinutesOneWay,
   });
   const aiPlan = await generateAiSchedule({
@@ -341,6 +440,7 @@ async function buildLayoverPlan({
       strategyPack: normalizedStrategyPack,
       airlineCode,
       flightNumber,
+      preferredPoiName: preferredOption ? preferredOption.poi.name : null,
     },
     airport,
     feasibility,
@@ -377,8 +477,18 @@ async function buildLayoverPlan({
       },
       scoreComponents,
     },
+    selection: {
+      requestedPoiName: requestedPreferredPoiName,
+      selectedBy: preferredOption
+        ? "user-preference"
+        : bestFeasibleOption
+          ? "system-ranking"
+          : "none",
+      preferredMatchFound: Boolean(preferredOption),
+    },
     map: {
       airport: {
+        code: airport.code,
         name: airport.name,
         lat: airport.lat,
         lon: airport.lon,
@@ -391,6 +501,14 @@ async function buildLayoverPlan({
         category: item.poi.category,
         score: item.feasibility.score,
         riskLabel: item.feasibility.riskLabel,
+        feasible: item.feasibility.feasible,
+        slackMinutes: item.feasibility.slackMinutes,
+        outboundMinutes: item.outboundMinutes,
+        inboundMinutes: item.inboundMinutes,
+        dwellMinutes: item.dwellMinutes,
+        selected: Boolean(
+          selectedPoi && normalizePoiName(selectedPoi.name) === normalizePoiName(item.poi.name)
+        ),
       })),
     },
   };
