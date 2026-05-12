@@ -152,21 +152,21 @@ npm start
 Create a local `.env` file in the project root:
 
 ```bash
-OPENAI_API_KEY=your_api_key_here
-OPENAI_MODEL=gpt-4.1-mini
+GEMINI_API_KEY=your_api_key_here
+GEMINI_MODEL=gemini-2.0-flash
 # Optional: enables live place ratings/reviews in Place Preview panel
 GOOGLE_PLACES_API_KEY=your_google_places_key_here
 # Optional: enables Yelp listing links, ratings, and review snippets
 YELP_API_KEY=your_yelp_fusion_key_here
 ```
 
-Then restart the server:
+Get a free Gemini API key at https://aistudio.google.com/apikey. Then restart the server:
 
 ```bash
 npm start
 ```
 
-Without `OPENAI_API_KEY`, the app still works but uses fallback wording instead of AI-generated schedule text.
+Without `GEMINI_API_KEY`, the app still works but uses fallback wording instead of AI-generated schedule text.
 
 ---
 

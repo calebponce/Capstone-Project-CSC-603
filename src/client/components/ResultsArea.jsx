@@ -514,6 +514,26 @@ export default function ResultsArea({
     Number.isFinite(currentPlan?.observability?.generatedInMs)
       ? `${currentPlan.observability.generatedInMs}ms`
       : "n/a";
+  const aiInfo = currentPlan?.ai || null;
+  const aiBadge = aiInfo?.used
+    ? {
+        text: `AI: ${aiInfo.provider} ${aiInfo.model}${
+          Number.isFinite(aiInfo.latencyMs) ? ` · ${aiInfo.latencyMs}ms` : ""
+        }`,
+        title: "Live LLM call",
+        tone: "ai-on",
+      }
+    : {
+        text: "AI: fallback (no LLM)",
+        title: aiInfo?.error || "LLM not configured",
+        tone: "ai-off",
+      };
+  const travelerTips = Array.isArray(aiInfo?.travelerTips) ? aiInfo.travelerTips : [];
+  const aiRiskExplainer = aiInfo?.riskExplainer || null;
+  const aiSelectionRationale = aiInfo?.selectionRationale || null;
+  const aiPickedByLlm = currentPlan?.selection?.selectedBy === "ai-ranking";
+  const candidateBlurbs = aiInfo?.candidateBlurbs || {};
+  const summaryCandidateBlurb = summaryCandidate?.name ? candidateBlurbs[summaryCandidate.name] : null;
 
   const actionPoi = summaryCandidate || currentPlan?.map?.selectedPoi || null;
   const isSelectedByUser = currentPlan?.selection?.selectedBy === "user-preference";
@@ -737,6 +757,9 @@ export default function ResultsArea({
                   <span className="pulse-dot"></span>
                   <span className="mono">{riskClass.toUpperCase()} RISK</span>
                 </div>
+                {aiRiskExplainer && (
+                  <p className="risk-explainer">{aiRiskExplainer}</p>
+                )}
               </div>
             </div>
 
@@ -749,51 +772,15 @@ export default function ResultsArea({
               </p>
             </div>
 
-            <p className="summary-updated mono">PLAN_SYNC: {generatedAtLabel}</p>
-            <p className="summary-meta-line">
-              Applied stop: {summaryCandidate?.name || "In-airport"} · {selectedByLabel} · Engine: {engineLatency}
-            </p>
-            <div className="decision-why">
-              <p>Confidence score: {summaryScore}/100</p>
-              <p>Slack: {formatMinutes(summarySlack)}</p>
-            </div>
-            <p className="narrative">{summaryNarrative}</p>
+            {aiPickedByLlm && aiSelectionRationale && (
+              <p className="ai-rationale">
+                <span className="ai-rationale-label">AI pick:</span> {aiSelectionRationale}
+              </p>
+            )}
             {isPendingSelection && (
               <p className="pending-panel-note">
                 Decision, timeline, and map will refresh together once the new choice is applied.
               </p>
-            )}
-
-            {summaryCandidate && (
-              <section className="candidate-compare-detail">
-                <div className="candidate-status-row">
-                  <span className={`candidate-status-badge ${displayInsights.statusTone}`}>
-                    {displayInsights.statusLabel}
-                  </span>
-                  <span className="candidate-status-meta mono">
-                    Travel {formatMinutes(travelMinutes(summaryCandidate))} · Dwell{" "}
-                    {formatMinutes(summaryCandidate?.dwellMinutes)}
-                  </span>
-                </div>
-                <div className="candidate-tradeoff-grid">
-                  <div className="candidate-tradeoff pros">
-                    <h4>Upsides</h4>
-                    <ul>
-                      {displayInsights.pros.slice(0, 3).map((insight) => (
-                        <li key={insight}>{insight}</li>
-                      ))}
-                    </ul>
-                  </div>
-                  <div className="candidate-tradeoff cons">
-                    <h4>Downsides</h4>
-                    <ul>
-                      {displayInsights.cons.slice(0, 3).map((insight) => (
-                        <li key={insight}>{insight}</li>
-                      ))}
-                    </ul>
-                  </div>
-                </div>
-              </section>
             )}
 
             {sortedCandidates.length > 0 && (
@@ -960,26 +947,23 @@ export default function ResultsArea({
                       </div>
                     ) : null}
                     <div className="place-preview-links">
-                      {placePreview?.links?.googleMaps && (
-                        <a
-                          href={placePreview.links.googleMaps}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="ride-open-btn"
-                        >
-                          Open Google Maps
-                        </a>
-                      )}
-                      {placePreview?.links?.appleMaps && (
-                        <a
-                          href={placePreview.links.appleMaps}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="ride-open-btn"
-                        >
-                          Open Apple Maps
-                        </a>
-                      )}
+                      {(() => {
+                        const ua = typeof navigator !== "undefined" ? navigator.userAgent || "" : "";
+                        const preferApple = /iPhone|iPad|iPod|Macintosh|Mac OS X/.test(ua);
+                        const mapsHref = preferApple
+                          ? placePreview?.links?.appleMaps || placePreview?.links?.googleMaps
+                          : placePreview?.links?.googleMaps || placePreview?.links?.appleMaps;
+                        return mapsHref ? (
+                          <a
+                            href={mapsHref}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="ride-open-btn"
+                          >
+                            Open in Maps
+                          </a>
+                        ) : null;
+                      })()}
                       {placePreview?.links?.yelp && (
                         <a
                           href={placePreview.links.yelp}
@@ -994,7 +978,7 @@ export default function ResultsArea({
                     {Array.isArray(placePreview?.reviews) && placePreview.reviews.length > 0 ? (
                       <div className="place-review-list">
                         {placePreview.reviews.slice(0, 3).map((review, index) => (
-                          <article key={`${review.author}-${index}`} className="place-review-item">
+                          <article key={`${review.source || "src"}-${review.author}-${index}`} className="place-review-item">
                             <p className="place-review-head">
                               <strong>{review.author}</strong>
                               <span>
@@ -1204,6 +1188,62 @@ export default function ResultsArea({
                       <strong>{riskClass.toUpperCase()}</strong>
                     </div>
                   </div>
+
+                  <p className="summary-meta-line">
+                    {selectedByLabel} · Engine: {engineLatency}
+                    {" · "}
+                    <span className={`ai-badge ${aiBadge.tone}`} title={aiBadge.title}>
+                      {aiBadge.text}
+                    </span>
+                  </p>
+
+                  <p className="narrative">{summaryNarrative}</p>
+
+                  {summaryCandidate && (
+                    <section className="candidate-compare-detail">
+                      <div className="candidate-status-row">
+                        <span className={`candidate-status-badge ${displayInsights.statusTone}`}>
+                          {displayInsights.statusLabel}
+                        </span>
+                        <span className="candidate-status-meta mono">
+                          Travel {formatMinutes(travelMinutes(summaryCandidate))} · Dwell{" "}
+                          {formatMinutes(summaryCandidate?.dwellMinutes)}
+                        </span>
+                      </div>
+                      {summaryCandidateBlurb && (
+                        <p className="candidate-blurb">{summaryCandidateBlurb}</p>
+                      )}
+                      <div className="candidate-tradeoff-grid">
+                        <div className="candidate-tradeoff pros">
+                          <h4>Upsides</h4>
+                          <ul>
+                            {displayInsights.pros.slice(0, 3).map((insight) => (
+                              <li key={insight}>{insight}</li>
+                            ))}
+                          </ul>
+                        </div>
+                        <div className="candidate-tradeoff cons">
+                          <h4>Downsides</h4>
+                          <ul>
+                            {displayInsights.cons.slice(0, 3).map((insight) => (
+                              <li key={insight}>{insight}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+                    </section>
+                  )}
+
+                  {travelerTips.length > 0 && (
+                    <div className="traveler-tips">
+                      <h4>Traveler tips</h4>
+                      <ul>
+                        {travelerTips.map((tip) => (
+                          <li key={tip}>{tip}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </motion.article>
               )}
 

@@ -1,6 +1,8 @@
 const { INTEREST_CONFIG } = require("../config/airports");
 const { calculateFeasibility } = require("./feasibilityService");
 const { generateAiSchedule } = require("./aiScheduleService");
+const { generateAiSelection } = require("./aiSelectionService");
+const logger = require("../utils/logger");
 const { fetchPois, getRouteEstimateMinutes } = require("./mapsService");
 const { addMinutes, formatTimestamp, minutesBetween } = require("../utils/time");
 
@@ -144,6 +146,56 @@ function compareOptions(a, b) {
   }
 
   return (b?.dwellMinutes || 0) - (a?.dwellMinutes || 0);
+}
+
+function buildProfileShortlist(options, riskProfile, limit = 6) {
+  const feasible = options.filter((item) => item?.feasibility?.feasible);
+  if (feasible.length === 0) {
+    return [];
+  }
+
+  if (riskProfile === "conservative") {
+    return [...feasible]
+      .sort(
+        (a, b) =>
+          (b.feasibility.slackMinutes || 0) - (a.feasibility.slackMinutes || 0) ||
+          (b.feasibility.score || 0) - (a.feasibility.score || 0)
+      )
+      .slice(0, limit);
+  }
+
+  if (riskProfile === "explorer") {
+    const byScore = [...feasible].sort(
+      (a, b) => (b.feasibility.score || 0) - (a.feasibility.score || 0)
+    );
+    const result = [];
+    const seenCategories = new Set();
+    for (const item of byScore) {
+      if (result.length >= limit) break;
+      const category = (item.poi?.category || "general").toLowerCase();
+      if (!seenCategories.has(category)) {
+        seenCategories.add(category);
+        result.push(item);
+      }
+    }
+    for (const item of byScore) {
+      if (result.length >= limit) break;
+      if (!result.includes(item)) result.push(item);
+    }
+    const farthest = [...feasible].sort(
+      (a, b) => (b.outboundMinutes || 0) - (a.outboundMinutes || 0)
+    )[0];
+    if (farthest && !result.includes(farthest) && result.length >= limit) {
+      result[result.length - 1] = farthest;
+    } else if (farthest && !result.includes(farthest)) {
+      result.push(farthest);
+    }
+    return result.slice(0, limit);
+  }
+
+  return [...feasible]
+    .sort((a, b) => (b.feasibility.score || 0) - (a.feasibility.score || 0))
+    .slice(0, limit);
 }
 
 function buildCandidateSet(options, selectedOption, limit = 8) {
@@ -506,7 +558,48 @@ async function buildLayoverPlan({
       enriched.find((item) => normalizePoiName(item.poi.name) === normalizedPreferredPoiName) || null;
   }
   const bestFeasibleOption = enriched.find((item) => item.feasibility.feasible) || null;
-  const selectedOption = preferredOption || bestFeasibleOption || enriched[0] || null;
+
+  const feasibleShortlist = buildProfileShortlist(enriched, normalizedRiskProfile, 6);
+  const aiSelection = !preferredOption && feasibleShortlist.length > 1
+    ? await generateAiSelection({
+        airport,
+        connectionType,
+        interests: effectiveInterests,
+        riskProfile: normalizedRiskProfile,
+        feasibility: bestFeasibleOption?.feasibility || null,
+        summary: { processingMinutes, returnBufferMinutes, layoverMinutes },
+        candidates: feasibleShortlist,
+      })
+    : {
+        provider: "fallback",
+        model: null,
+        used: false,
+        latencyMs: 0,
+        pickedCandidateName: null,
+        selectionRationale: null,
+        riskExplainer: null,
+        candidateBlurbs: {},
+        error: preferredOption
+          ? "User explicitly selected a POI; AI selection skipped."
+          : "Not enough feasible candidates for AI selection.",
+      };
+
+  const aiPickedOption = aiSelection.pickedCandidateName
+    ? feasibleShortlist.find(
+        (item) => normalizePoiName(item.poi.name) === normalizePoiName(aiSelection.pickedCandidateName)
+      ) || null
+    : null;
+  if (aiSelection.pickedCandidateName && !aiPickedOption) {
+    logger.warn(
+      {
+        picked: aiSelection.pickedCandidateName,
+        candidates: feasibleShortlist.map((c) => c.poi.name),
+      },
+      "ai_selection_pick_mismatch"
+    );
+  }
+
+  const selectedOption = preferredOption || aiPickedOption || bestFeasibleOption || enriched[0] || null;
   const feasibility = selectedOption
     ? selectedOption.feasibility
     : calculateFeasibility({
@@ -598,12 +691,16 @@ async function buildLayoverPlan({
     schedule: aiPlan.schedule,
     narrative: aiPlan.narrative,
     ai: {
-      provider: aiPlan.provider,
-      model: aiPlan.model,
-      used: aiPlan.used,
+      provider: aiPlan.used || aiSelection.used ? "gemini" : aiPlan.provider,
+      model: aiPlan.model || aiSelection.model,
+      used: aiPlan.used || aiSelection.used,
+      latencyMs: (aiPlan.latencyMs || 0) + (aiSelection.latencyMs || 0),
       title: aiPlan.title,
       travelerTips: aiPlan.travelerTips,
-      error: aiPlan.error,
+      selectionRationale: aiSelection.selectionRationale,
+      riskExplainer: aiSelection.riskExplainer,
+      candidateBlurbs: aiSelection.candidateBlurbs || {},
+      error: aiPlan.error || aiSelection.error,
     },
     explainability: {
       riskProfile: {
@@ -631,10 +728,13 @@ async function buildLayoverPlan({
       requestedPoiName: requestedPreferredPoiName,
       selectedBy: preferredOption
         ? "user-preference"
-        : selectedOption
-          ? "system-ranking"
-          : "none",
+        : aiPickedOption
+          ? "ai-ranking"
+          : selectedOption
+            ? "system-ranking"
+            : "none",
       preferredMatchFound: Boolean(preferredOption),
+      aiRationale: aiSelection.selectionRationale,
     },
     map: {
       airport: {

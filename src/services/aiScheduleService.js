@@ -1,4 +1,6 @@
-const DEFAULT_MODEL = "gpt-4.1-mini";
+const logger = require("../utils/logger");
+
+const DEFAULT_MODEL = "gemini-2.0-flash";
 
 function buildFallbackAiPlan({ schedule, narrative }) {
   const travelerTips = schedule.length
@@ -17,6 +19,7 @@ function buildFallbackAiPlan({ schedule, narrative }) {
     provider: "fallback",
     model: null,
     used: false,
+    latencyMs: 0,
     title: null,
     narrative,
     schedule,
@@ -25,15 +28,11 @@ function buildFallbackAiPlan({ schedule, narrative }) {
   };
 }
 
-function extractResponseText(data) {
-  if (typeof data.output_text === "string") {
-    return data.output_text;
-  }
-
-  const output = Array.isArray(data.output) ? data.output : [];
-  return output
-    .flatMap((item) => (Array.isArray(item.content) ? item.content : []))
-    .map((content) => content.text || "")
+function extractGeminiText(data) {
+  const candidate = Array.isArray(data?.candidates) ? data.candidates[0] : null;
+  const parts = Array.isArray(candidate?.content?.parts) ? candidate.content.parts : [];
+  return parts
+    .map((part) => (typeof part.text === "string" ? part.text : ""))
     .join("")
     .trim();
 }
@@ -120,14 +119,20 @@ async function generateAiSchedule({
   schedule,
   fallbackNarrative,
 }) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  const model = process.env.OPENAI_MODEL || DEFAULT_MODEL;
+  const apiKey = process.env.GEMINI_API_KEY;
+  const model = process.env.GEMINI_MODEL || DEFAULT_MODEL;
+  const startedAt = Date.now();
 
   if (!apiKey || apiKey === "replace_with_your_api_key_here") {
-    return {
+    const result = {
       ...buildFallbackAiPlan({ schedule, narrative: fallbackNarrative }),
-      error: "OPENAI_API_KEY is not configured.",
+      error: "GEMINI_API_KEY is not configured.",
     };
+    logger.info(
+      { provider: result.provider, model: null, used: false, latencyMs: 0, error: result.error },
+      "ai_schedule_call"
+    );
+    return result;
   }
 
   const payload = {
@@ -145,35 +150,42 @@ async function generateAiSchedule({
   };
 
   try {
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        input: buildPrompt(payload),
-        temperature: 0.3,
-        max_output_tokens: 900,
-      }),
-    });
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+      {
+        method: "POST",
+        headers: {
+          "x-goog-api-key": apiKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: buildPrompt(payload) }] }],
+          generationConfig: {
+            temperature: 0.3,
+            maxOutputTokens: 900,
+            responseMimeType: "application/json",
+          },
+        }),
+      }
+    );
 
     const data = await response.json();
     if (!response.ok) {
-      throw new Error(data.error?.message || `OpenAI request failed with ${response.status}`);
+      throw new Error(data.error?.message || `Gemini request failed with ${response.status}`);
     }
 
-    const parsed = parseJsonResponse(extractResponseText(data));
+    const parsed = parseJsonResponse(extractGeminiText(data));
     const narrative =
       typeof parsed.narrative === "string" && parsed.narrative.trim()
         ? parsed.narrative.trim()
         : fallbackNarrative;
+    const latencyMs = Date.now() - startedAt;
 
-    return {
-      provider: "openai",
+    const result = {
+      provider: "gemini",
       model,
       used: true,
+      latencyMs,
       title:
         typeof parsed.title === "string" && parsed.title.trim()
           ? parsed.title.trim()
@@ -183,11 +195,23 @@ async function generateAiSchedule({
       travelerTips: normalizeTips(parsed.travelerTips),
       error: null,
     };
+    logger.info(
+      { provider: result.provider, model: result.model, used: true, latencyMs, error: null },
+      "ai_schedule_call"
+    );
+    return result;
   } catch (error) {
-    return {
+    const latencyMs = Date.now() - startedAt;
+    const result = {
       ...buildFallbackAiPlan({ schedule, narrative: fallbackNarrative }),
+      latencyMs,
       error: error.message,
     };
+    logger.info(
+      { provider: result.provider, model, used: false, latencyMs, error: error.message },
+      "ai_schedule_call"
+    );
+    return result;
   }
 }
 

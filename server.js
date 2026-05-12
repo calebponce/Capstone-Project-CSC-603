@@ -634,23 +634,24 @@ app.post("/api/plan", async (req, res, next) => {
     // Save to Vault if requested and user is authenticated
     if (req.body.saveToVault) {
       const authHeader = req.headers.authorization;
-      if (authHeader && authHeader.startsWith("Bearer ")) {
-        const decoded = verifyToken(authHeader.split(" ")[1]);
-        if (decoded) {
-          const user = users.find(u => u.id === decoded.id);
-          if (user) {
-            user.savedPlans = user.savedPlans || [];
-            user.savedPlans.unshift({
-              id: Date.now(),
-              title: planResult.ai?.title || "Layover Plan",
-              airportCode: planResult.request.airportCode,
-              generatedAt: new Date().toISOString(),
-              plan: planResult
-            });
-            // Keep only last 20 plans
-            user.savedPlans = user.savedPlans.slice(0, 20);
-          }
-        }
+      const token = authHeader && authHeader.startsWith("Bearer ") ? authHeader.split(" ")[1] : null;
+      const decoded = token ? verifyToken(token) : null;
+      const user = decoded ? users.find((u) => u.id === decoded.id) : null;
+      if (user) {
+        user.savedPlans = user.savedPlans || [];
+        user.savedPlans.unshift({
+          id: Date.now(),
+          title: planResult.ai?.title || "Layover Plan",
+          airportCode: planResult.request.airportCode,
+          generatedAt: new Date().toISOString(),
+          plan: planResult,
+        });
+        user.savedPlans = user.savedPlans.slice(0, 20);
+      } else {
+        logger.warn(
+          { hasToken: Boolean(token), tokenValid: Boolean(decoded) },
+          "vault_save_skipped_unauthenticated"
+        );
       }
     }
 

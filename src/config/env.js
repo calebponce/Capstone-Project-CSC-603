@@ -31,7 +31,8 @@ function loadEnvFile(filePath = path.join(process.cwd(), ".env")) {
 
     const key = trimmed.slice(0, equalsIndex).trim();
     const value = unquote(trimmed.slice(equalsIndex + 1));
-    if (key && process.env[key] == null) {
+    const existing = process.env[key];
+    if (key && (existing == null || existing.trim() === "")) {
       process.env[key] = value;
     }
   }
