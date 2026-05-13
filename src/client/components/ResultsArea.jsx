@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Map from "./Map";
 import ShareCenter from "./ShareCenter";
-import { formatDateTime, formatMinutes, formatDuration } from "../utils";
+import { formatDateTime, formatMinutes } from "../utils";
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -42,6 +42,55 @@ function normalizeCandidateName(value) {
     .replace(/\u2019/g, "'")
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
+}
+
+const CATEGORY_LABEL_MAP = {
+  beach: "Beach",
+  peak: "Peak",
+  cliff: "Cliff",
+  viewpoint: "Viewpoint",
+  nature_reserve: "Nature reserve",
+  garden: "Garden",
+  dog_park: "Dog park",
+  park: "Park",
+  picnic_site: "Picnic site",
+  museum: "Museum",
+  gallery: "Gallery",
+  arts_centre: "Arts centre",
+  theatre: "Theatre",
+  cinema: "Cinema",
+  monument: "Monument",
+  memorial: "Memorial",
+  castle: "Castle",
+  ruins: "Historic ruins",
+  attraction: "Attraction",
+  artwork: "Public art",
+  theme_park: "Theme park",
+  zoo: "Zoo",
+  aquarium: "Aquarium",
+  hiking: "Hiking route",
+  restaurant: "Restaurant",
+  cafe: "Caf\u00e9",
+  fast_food: "Fast food",
+  food_court: "Food court",
+  bar: "Bar",
+  biergarten: "Beer garden",
+  pub: "Pub",
+  mall: "Shopping mall",
+  department_store: "Department store",
+  supermarket: "Supermarket",
+  marketplace: "Marketplace",
+  gift: "Gift shop",
+  books: "Bookstore",
+};
+
+function formatCategory(value) {
+  if (!value) return "Point of interest";
+  const key = String(value).trim().toLowerCase();
+  if (CATEGORY_LABEL_MAP[key]) return CATEGORY_LABEL_MAP[key];
+  return key
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function candidateNamesMatch(left, right) {
@@ -163,47 +212,46 @@ function buildCandidateInsights(candidate, summary) {
   const travel = travelMinutes(candidate);
   const dwell = toFiniteNumber(candidate?.dwellMinutes);
   const oneWayThreshold = toFiniteNumber(summary?.maxTravelMinutesOneWay);
+  const oneWay = travel != null ? Math.round(travel / 2) : null;
+  const placeName = candidate?.name || "this stop";
 
   if (feasible) {
-    pros.push("Feasible return window for the current layover.");
+    pros.push("You can comfortably make it back in time for your flight.");
   } else {
-    cons.push("Not feasibility-safe for this current window.");
+    cons.push("The return window is too tight — better to stay airport-side.");
   }
 
-  if (slack != null && slack >= 45) {
-    pros.push(`Strong slack buffer (${formatMinutes(slack)}).`);
-  } else if (slack != null && slack >= 20) {
-    pros.push(`Moderate slack buffer (${formatMinutes(slack)}).`);
-  } else if (slack != null) {
-    cons.push(`Low slack buffer (${formatMinutes(slack)}).`);
-  }
-
-  if (travel != null && oneWayThreshold != null) {
-    const halfTravel = Math.round(travel / 2);
-    if (halfTravel <= oneWayThreshold) {
-      pros.push(`Travel time stays within the recommended threshold (${halfTravel} min one-way).`);
-    } else {
-      cons.push(`Travel time exceeds the recommended one-way threshold (${halfTravel} min vs ${oneWayThreshold} min).`);
+  if (oneWay != null) {
+    if (oneWay <= 12) {
+      pros.push(`Quick ride from the terminal — about ${oneWay} minutes each way.`);
+    } else if (oneWayThreshold != null && oneWay > oneWayThreshold) {
+      cons.push(`A longer haul out and back (${oneWay} min one-way) that cuts into your time on the ground.`);
     }
   }
 
-  if (dwell != null && dwell >= 45) {
-    pros.push(`Meaningful dwell window (${formatMinutes(dwell)}).`);
+  if (dwell != null && dwell >= 60) {
+    pros.push(`A full ${formatMinutes(dwell)} on the ground — enough to actually enjoy ${placeName}.`);
+  } else if (dwell != null && dwell >= 40) {
+    pros.push(`A solid ${formatMinutes(dwell)} window to take it in without rushing.`);
   } else if (dwell != null && dwell < 30) {
-    cons.push(`Short dwell window (${formatMinutes(dwell)}).`);
+    cons.push(`Short visit — only ${formatMinutes(dwell)} on-site before you need to head back.`);
   }
 
-  if (riskClass === "high") {
-    cons.push("High-risk classification due to limited margin or travel risk.");
-  } else if (riskClass === "low") {
-    pros.push("Low-risk classification based on current constraints.");
+  if (slack != null && slack < 15 && feasible) {
+    cons.push(`Not much wiggle room if traffic or a line slows you down.`);
+  } else if (slack != null && slack >= 45) {
+    pros.push("Generous safety margin built in, so a little delay won't sink the trip.");
+  }
+
+  if (riskClass === "low" && pros.length < 3) {
+    pros.push("Low-stress option for the time you have.");
   }
 
   if (pros.length === 0) {
-    pros.push("Balanced tradeoff for this airport/time window.");
+    pros.push(`${placeName} fits the window you have to work with.`);
   }
   if (cons.length === 0) {
-    cons.push("No major downside flagged for current constraints.");
+    cons.push("No big drawbacks — just keep an eye on the time.");
   }
 
   let statusLabel = "Caution";
@@ -444,6 +492,11 @@ export default function ResultsArea({
     return hasSelectedInList ? baseCandidates : [selectedCandidate, ...baseCandidates];
   }, [currentPlan, selectedCandidate]);
   const sortedCandidates = useMemo(() => [...candidates].sort(compareCandidates), [candidates]);
+  const tieredOptions = Array.isArray(currentPlan?.riskTieredOptions)
+    ? currentPlan.riskTieredOptions
+    : [];
+  const aiProsConsByName = currentPlan?.ai?.candidateProsConsByName || {};
+  const aiPickedName = currentPlan?.ai?.pickedCandidateName || null;
 
   const selectedPoiName = currentPlan?.map?.selectedPoi?.name || "";
   const displayCandidateName = pendingCandidateName || activeCandidateName || selectedPoiName || "";
@@ -473,12 +526,6 @@ export default function ResultsArea({
     typeof summaryCandidate?.feasible === "boolean"
       ? summaryCandidate.feasible
       : Boolean(currentPlan?.feasibility?.feasible);
-  const summaryScore =
-    toFiniteNumber(summaryCandidate?.score) ?? toFiniteNumber(currentPlan?.feasibility?.score) ?? 0;
-  const summarySlack =
-    toFiniteNumber(summaryCandidate?.slackMinutes) ??
-    toFiniteNumber(currentPlan?.feasibility?.slackMinutes) ??
-    0;
   const summaryTitle =
     summaryCandidate?.name ||
     currentPlan?.ai?.title ||
@@ -584,16 +631,16 @@ export default function ResultsArea({
         return response.json();
       })
       .then((data) => {
+        if (controller.signal.aborted) return;
         setPlacePreview(data?.preview || null);
+        setIsPlacePreviewLoading(false);
       })
       .catch((error) => {
-        if (error?.name === "AbortError") {
+        if (controller.signal.aborted || error?.name === "AbortError") {
           return;
         }
         setPlacePreview(null);
         setPlacePreviewError(error.message || "Place preview unavailable");
-      })
-      .finally(() => {
         setIsPlacePreviewLoading(false);
       });
 
@@ -645,79 +692,10 @@ export default function ResultsArea({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
         >
-          <article className="card empty-state-card reveal">
-            <div className="empty-state-content">
-              <div className="empty-state-hero">
-                <p className="eyebrow">Before You Generate</p>
-                <h2>Build one layover plan and compare the safest options in one surface.</h2>
-                <p>
-                  Set the airport, arrival window, and travel style on the left. LayoverPlus will
-                  score nearby stops, explain the tradeoffs, and keep the decision, timeline, map,
-                  and place preview aligned when you switch choices.
-                </p>
-              </div>
-
-              <div className="empty-kpi-grid">
-                <div className="empty-kpi">
-                  <span>Best Stop</span>
-                  <strong>Risk-Scored Recommendation</strong>
-                </div>
-                <div className="empty-kpi">
-                  <span>Trip Timing</span>
-                  <strong>Timeline + Safety Buffer</strong>
-                </div>
-                <div className="empty-kpi">
-                  <span>Place Context</span>
-                  <strong>Map + Photos + Reviews</strong>
-                </div>
-              </div>
-
-              <div className="empty-launch-options">
-                <p className="mini-label">What Your Plan Includes</p>
-                <div className="empty-option-grid">
-                  <article className="empty-option-card">
-                    <h3>Safer alternative ranking</h3>
-                    <p>Compare nearby stops by score, slack buffer, travel time, and risk explanation.</p>
-                    <span>Choice comparison</span>
-                  </article>
-                  <article className="empty-option-card">
-                    <h3>Synced timeline and route</h3>
-                    <p>See when to leave, how long to stay, and how much buffer remains before departure.</p>
-                    <span>Timing model</span>
-                  </article>
-                  <article className="empty-option-card">
-                    <h3>Place preview before you go</h3>
-                    <p>Inspect the stop on a map, open it in Apple or Google Maps, and review the place context.</p>
-                    <span>Preview surface</span>
-                  </article>
-                </div>
-              </div>
-
-              <div className="empty-flow">
-                <p className="mini-label">How To Use It</p>
-                <ol>
-                  <li>
-                    <strong>Set your airport and layover window</strong>
-                    <span>Use a quick-start template or enter your own arrival and departure times.</span>
-                  </li>
-                  <li>
-                    <strong>Generate and compare options</strong>
-                    <span>Choose the safest stop or inspect alternatives with clear upsides and downsides.</span>
-                  </li>
-                  <li>
-                    <strong>Open maps, rides, or save the result</strong>
-                    <span>Move from plan to action without losing the timing and risk context.</span>
-                  </li>
-                </ol>
-              </div>
-
-              <div className="empty-signals">
-                <span className="empty-pill">Feasibility scoring</span>
-                <span className="empty-pill">Live choice sync</span>
-                <span className="empty-pill">Map auto-focus</span>
-                <span className="empty-pill">Place preview links</span>
-              </div>
-            </div>
+          <article className="card empty-placeholder reveal">
+            <p className="empty-placeholder-emoji" aria-hidden="true">✈️</p>
+            <h3>Your plan will appear here</h3>
+            <p>Fill in the form on the left and hit <strong>Build my layover plan</strong>.</p>
           </article>
         </motion.section>
       ) : (
@@ -783,92 +761,80 @@ export default function ResultsArea({
               </p>
             )}
 
-            {sortedCandidates.length > 0 && (
-              <section className="candidate-section">
-                <p className="mini-label">Compare Alternative Stops</p>
-                <p className="candidate-rank-note">
-                  Ranked safest-first for current timing. {sortedCandidates.length} options available.
+            {tieredOptions.length > 0 && (
+              <section className="three-options-section">
+                <p className="mini-label">Your 3 options</p>
+                <p className="three-options-lead">
+                  Tap any card to use it as the plan — the timeline and map update instantly.
                 </p>
-                {metricDelta && baselineCandidate && (
-                  <div className="candidate-delta-card">
-                    <p className="mono candidate-delta-label">
-                      Compared with safest option: {baselineCandidate.name}
-                    </p>
-                    <div className="candidate-delta-grid">
-                      <div className={`candidate-delta-pill ${deltaTone(metricDelta.slack, { higherIsBetter: true })}`}>
-                        Slack {formatSignedMinutes(metricDelta.slack)}
-                      </div>
-                      <div className={`candidate-delta-pill ${deltaTone(metricDelta.travel, { higherIsBetter: false })}`}>
-                        Travel {formatSignedMinutes(metricDelta.travel)}
-                      </div>
-                      <div className={`candidate-delta-pill ${deltaTone(metricDelta.dwell, { higherIsBetter: true })}`}>
-                        Dwell {formatSignedMinutes(metricDelta.dwell)}
-                      </div>
-                    </div>
-                  </div>
-                )}
-                <div className="candidate-workbench">
-                  <div className="candidate-list">
-                    {sortedCandidates.map((candidate, index) => {
-                      const candidateInsights = buildCandidateInsights(candidate, currentPlan?.summary);
-                      const isActive = candidateNamesMatch(candidate.name, displayCandidate?.name);
-                      const riskTone = normalizeRiskLabel(candidate.riskLabel);
+                <div className="three-options-grid">
+                  {tieredOptions.map((option, index) => {
+                    const isActive = candidateNamesMatch(option.name, displayCandidate?.name);
+                    const isAiPick = aiPickedName && candidateNamesMatch(option.name, aiPickedName);
+                    const riskTone = normalizeRiskLabel(option.riskLabel);
+                    const prosCons = aiProsConsByName[option.name] || { pros: [], cons: [] };
+                    const fallback = buildCandidateInsights(option, currentPlan?.summary);
+                    const pros = prosCons.pros.length > 0 ? prosCons.pros : fallback.pros.slice(0, 2);
+                    const cons = prosCons.cons.length > 0 ? prosCons.cons : fallback.cons.slice(0, 2);
 
-                      return (
-                        <button
-                          key={`${candidate.name}-${candidate.lat}-${candidate.lon}`}
-                          type="button"
-                          className={`candidate-item ${isActive ? "active" : ""}`}
-                          onClick={() => handleCandidateClick(candidate)}
-                          aria-pressed={isActive}
-                        >
-                          <div className="candidate-card-head">
-                            <p className="candidate-title">
-                              {candidate.name}
-                              {isActive ? <span className="candidate-current-tag">Selected</span> : null}
+                    return (
+                      <button
+                        key={`${option.name}-${option.lat}-${option.lon}`}
+                        type="button"
+                        className={`option-card ${isActive ? "active" : ""} ${isAiPick ? "ai-pick" : ""}`}
+                        onClick={() => handleCandidateClick(option)}
+                        aria-pressed={isActive}
+                      >
+                        <div className="option-card-head">
+                          <div className="option-card-titles">
+                            <p className="option-card-title">{option.name}</p>
+                            <p className="option-card-category">
+                              {formatCategory(option.category)}
                             </p>
-                            <span className={`candidate-status-mini ${candidateInsights.statusTone}`}>
-                              {candidateInsights.statusLabel}
+                          </div>
+                          <div className="option-card-badges">
+                            {isAiPick && <span className="option-ai-pick-badge">AI pick</span>}
+                            <span className={`risk-chip ${riskTone}`}>
+                              {String(option.riskLabel || "Medium").toUpperCase()}
                             </span>
                           </div>
-                          <p className="candidate-rank">
-                            Rank {index + 1} of {sortedCandidates.length}
-                          </p>
-                          <p className="candidate-meta">
-                            {(candidate.category || "Point of interest").replaceAll("_", " ")} · Score{" "}
-                            {candidate.score}/100 · Slack {formatMinutes(candidate.slackMinutes)}
-                          </p>
-                          {candidate.address ? (
-                            <p className="candidate-meta-address">{candidate.address}</p>
-                          ) : null}
-                          <div className="candidate-score-row">
-                            <span className={`risk-chip ${riskTone}`}>{String(candidate.riskLabel || "Medium").toUpperCase()}</span>
-                            <span className="mono">
-                              Travel {formatMinutes(travelMinutes(candidate))} · Dwell {formatMinutes(candidate.dwellMinutes)}
-                            </span>
+                        </div>
+                        <p className="option-card-meta mono">
+                          Score {option.score}/100 · Slack {formatMinutes(option.slackMinutes)} · Travel{" "}
+                          {formatMinutes(travelMinutes(option))}
+                        </p>
+                        {pros.length > 0 && (
+                          <div className="option-pros">
+                            <span className="option-pros-label">Why this works</span>
+                            <ul>
+                              {pros.map((p) => <li key={p}>{p}</li>)}
+                            </ul>
                           </div>
-                          <div className="candidate-bullet-grid">
-                            <p>
-                              <strong>Upside:</strong> {candidateInsights.pros[0]}
-                            </p>
-                            <p>
-                              <strong>Downside:</strong> {candidateInsights.cons[0]}
-                            </p>
+                        )}
+                        {cons.length > 0 && (
+                          <div className="option-cons">
+                            <span className="option-cons-label">Trade-offs</span>
+                            <ul>
+                              {cons.map((c) => <li key={c}>{c}</li>)}
+                            </ul>
                           </div>
-                        </button>
-                      );
-                    })}
-                  </div>
+                        )}
+                        <span className="option-card-cta">
+                          {isActive ? "Currently selected" : "Use this stop →"}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
 
-                  <div className="candidate-preview-map">
-                    <Map
-                      currentPlan={currentPlan}
-                      highlightCandidate={mapFocusCandidate}
-                      highlightCandidateName={mapFocusName}
-                      compact
-                      invalidateTrigger={`${activeTab}:${mapFocusName || "none"}:${isPendingSelection ? "pending" : "ready"}`}
-                    />
-                  </div>
+                <div className="three-options-map">
+                  <Map
+                    currentPlan={currentPlan}
+                    highlightCandidate={mapFocusCandidate}
+                    highlightCandidateName={mapFocusName}
+                    compact
+                    invalidateTrigger={`${activeTab}:${mapFocusName || "none"}:${isPendingSelection ? "pending" : "ready"}`}
+                  />
                 </div>
               </section>
             )}
@@ -921,6 +887,10 @@ export default function ResultsArea({
                               src={photo.url}
                               alt={`${summaryCandidate.name} preview`}
                               loading="lazy"
+                              onError={(e) => {
+                                const figure = e.currentTarget.closest("figure");
+                                if (figure) figure.style.display = "none";
+                              }}
                             />
                             <figcaption>{photo.provider === "yelp" ? "Yelp photo" : "Map photo"}</figcaption>
                           </figure>
@@ -1105,12 +1075,36 @@ export default function ResultsArea({
             </motion.article>
           )}
 
-          <motion.nav variants={itemVariants} className="result-tabs reveal" role="tablist">
+          <motion.nav
+            variants={itemVariants}
+            className="result-tabs reveal"
+            role="tablist"
+            aria-label="Plan views"
+            onKeyDown={(e) => {
+              const order = ["decision", "timeline", "map"];
+              const idx = order.indexOf(activeTab);
+              if (idx < 0) return;
+              if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+                e.preventDefault();
+                setActiveTab(order[(idx + 1) % order.length]);
+              } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+                e.preventDefault();
+                setActiveTab(order[(idx - 1 + order.length) % order.length]);
+              } else if (e.key === "Home") {
+                e.preventDefault();
+                setActiveTab(order[0]);
+              } else if (e.key === "End") {
+                e.preventDefault();
+                setActiveTab(order[order.length - 1]);
+              }
+            }}
+          >
             <button
               id={tabIds.decision}
               role="tab"
               aria-selected={activeTab === "decision"}
               aria-controls={panelIds.decision}
+              tabIndex={activeTab === "decision" ? 0 : -1}
               className={`tab-btn ${activeTab === "decision" ? "active" : ""}`}
               onClick={() => setActiveTab("decision")}
             >
@@ -1121,6 +1115,7 @@ export default function ResultsArea({
               role="tab"
               aria-selected={activeTab === "timeline"}
               aria-controls={panelIds.timeline}
+              tabIndex={activeTab === "timeline" ? 0 : -1}
               className={`tab-btn ${activeTab === "timeline" ? "active" : ""}`}
               onClick={() => setActiveTab("timeline")}
             >
@@ -1131,6 +1126,7 @@ export default function ResultsArea({
               role="tab"
               aria-selected={activeTab === "map"}
               aria-controls={panelIds.map}
+              tabIndex={activeTab === "map" ? 0 : -1}
               className={`tab-btn ${activeTab === "map" ? "active" : ""}`}
               onClick={() => setActiveTab("map")}
             >
@@ -1162,31 +1158,9 @@ export default function ResultsArea({
                       )}
                     </div>
                   </div>
-                  <div className="summary-grid">
-                    <div>
-                      <span>Score</span>
-                      <strong>{summaryScore}</strong>
-                    </div>
-                    <div>
-                      <span>Layover</span>
-                      <strong>{formatDuration(currentPlan.summary.layoverMinutes)}</strong>
-                    </div>
-                    <div>
-                      <span>Processing</span>
-                      <strong>{formatMinutes(currentPlan.summary.processingMinutes)}</strong>
-                    </div>
-                    <div>
-                      <span>Buffer</span>
-                      <strong>{formatMinutes(currentPlan.summary.returnBufferMinutes)}</strong>
-                    </div>
-                    <div>
-                      <span>Slack</span>
-                      <strong>{formatMinutes(summarySlack)}</strong>
-                    </div>
-                    <div>
-                      <span>Risk</span>
-                      <strong>{riskClass.toUpperCase()}</strong>
-                    </div>
+                  <div className={`trip-risk-display ${riskClass}`}>
+                    <span className="trip-risk-label">Risk level</span>
+                    <strong className="trip-risk-value">{riskClass.toUpperCase()}</strong>
                   </div>
 
                   <p className="summary-meta-line">
@@ -1268,21 +1242,33 @@ export default function ResultsArea({
                     </p>
                   )}
                   <div className="timeline">
-                    {timelineSchedule.map((item, idx) => (
-                      <div
-                        key={`${item.label}-${idx}`}
-                        className={`timeline-item ${item?.source === "preview" ? "preview" : ""}`}
-                      >
-                        <div className="time-range">
-                          {item.start} - {item.end}
-                        </div>
-                        <div className="timeline-main">
-                          <strong>{item.label}</strong>
-                          <span>{item.location}</span>
-                        </div>
-                        <div className="timeline-duration">{formatMinutes(item.minutes)}</div>
-                      </div>
-                    ))}
+                    {timelineSchedule.length === 0 ? (
+                      <p className="candidate-preview-note">
+                        Timeline will populate once your plan is built.
+                      </p>
+                    ) : (
+                      timelineSchedule.map((item, idx) => {
+                        const isPreview = item?.source === "preview";
+                        return (
+                          <div
+                            key={`${item.label}-${idx}`}
+                            className={`timeline-item ${isPreview ? "preview" : ""}`}
+                          >
+                            <div className="time-range">
+                              {item.start} - {item.end}
+                            </div>
+                            <div className="timeline-main">
+                              <strong>
+                                {item.label}
+                                {isPreview && <span className="timeline-badge">Preview</span>}
+                              </strong>
+                              <span>{item.location}</span>
+                            </div>
+                            <div className="timeline-duration">{formatMinutes(item.minutes)}</div>
+                          </div>
+                        );
+                      })
+                    )}
                   </div>
                 </motion.article>
               )}

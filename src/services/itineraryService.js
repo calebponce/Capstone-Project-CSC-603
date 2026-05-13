@@ -148,6 +148,73 @@ function compareOptions(a, b) {
   return (b?.dwellMinutes || 0) - (a?.dwellMinutes || 0);
 }
 
+function buildRiskTieredOptions(enriched, riskProfile) {
+  if (!Array.isArray(enriched) || enriched.length === 0) {
+    return [];
+  }
+
+  const eligible = enriched.filter(
+    (c) =>
+      c?.feasibility?.feasible ||
+      (riskProfile === "explorer" && (c?.feasibility?.slackMinutes ?? -Infinity) >= -15)
+  );
+  if (eligible.length === 0) {
+    return [];
+  }
+  if (eligible.length <= 3) {
+    return [...eligible];
+  }
+
+  const byScore = [...eligible].sort(
+    (a, b) => (b?.feasibility?.score || 0) - (a?.feasibility?.score || 0)
+  );
+  const fillRemaining = (picked) => {
+    for (const item of byScore) {
+      if (picked.length >= 3) break;
+      if (!picked.includes(item)) picked.push(item);
+    }
+    return picked.slice(0, 3);
+  };
+
+  if (riskProfile === "conservative") {
+    return byScore.slice(0, 3);
+  }
+
+  if (riskProfile === "explorer") {
+    const anchor = byScore[0];
+    const picked = [anchor];
+    const usedCategories = new Set([(anchor.poi?.category || "general").toLowerCase()]);
+
+    const farthest = [...eligible]
+      .filter((c) => c !== anchor)
+      .sort((a, b) => (b?.outboundMinutes || 0) - (a?.outboundMinutes || 0))[0];
+    if (farthest) {
+      picked.push(farthest);
+      usedCategories.add((farthest.poi?.category || "general").toLowerCase());
+    }
+
+    const distinctive = byScore.find(
+      (c) =>
+        !picked.includes(c) && !usedCategories.has((c.poi?.category || "general").toLowerCase())
+    );
+    if (distinctive) picked.push(distinctive);
+
+    return fillRemaining(picked);
+  }
+
+  const total = byScore.length;
+  const picks = [
+    byScore[0],
+    byScore[Math.min(total - 1, Math.floor(total * 0.5))],
+    byScore[total - 1],
+  ];
+  const picked = [];
+  for (const item of picks) {
+    if (item && !picked.includes(item)) picked.push(item);
+  }
+  return fillRemaining(picked);
+}
+
 function buildProfileShortlist(options, riskProfile, limit = 6) {
   const feasible = options.filter((item) => item?.feasibility?.feasible);
   if (feasible.length === 0) {
@@ -457,16 +524,26 @@ async function buildLayoverPlan({
     baseMaxTravelMinutesOneWay + riskConfig.maxTravelDelta + strategyConfig.maxTravelDelta,
     8
   );
-  const tagSet = new Set();
-
   const effectiveInterests = interests.length
     ? interests
     : strategyConfig.fallbackInterests;
+  const selectorMap = new Map();
   effectiveInterests.forEach((interest) => {
-    for (const tag of INTEREST_CONFIG[interest].tags) {
-      tagSet.add(tag);
+    const cfg = INTEREST_CONFIG[interest];
+    if (!cfg) return;
+    // Support both new `selectors` and legacy `tags` shape.
+    const selectors = Array.isArray(cfg.selectors)
+      ? cfg.selectors
+      : Array.isArray(cfg.tags)
+        ? cfg.tags.map((value) => ({ key: "amenity", value }))
+        : [];
+    for (const sel of selectors) {
+      if (!sel?.key || !sel?.value) continue;
+      const key = `${sel.key}=${sel.value}`;
+      if (!selectorMap.has(key)) selectorMap.set(key, sel);
     }
   });
+  const interestSelectors = Array.from(selectorMap.values());
 
   const availableTripMinutes = layoverMinutes - processingMinutes - returnBufferMinutes;
   const requestedPreferredPoiName = preferredPoiName || preferredPoi?.name || null;
@@ -487,9 +564,9 @@ async function buildLayoverPlan({
       : null;
 
   let pois = [];
-  if (availableTripMinutes > 30) {
+  if (availableTripMinutes > 30 && interestSelectors.length > 0) {
     try {
-      pois = await fetchPois({ airport, tags: [...tagSet] });
+      pois = await fetchPois({ airport, selectors: interestSelectors });
     } catch (_error) {
       // Graceful fallback: continue with in-airport recommendation when POI lookup fails.
       pois = [];
@@ -559,8 +636,8 @@ async function buildLayoverPlan({
   }
   const bestFeasibleOption = enriched.find((item) => item.feasibility.feasible) || null;
 
-  const feasibleShortlist = buildProfileShortlist(enriched, normalizedRiskProfile, 6);
-  const aiSelection = !preferredOption && feasibleShortlist.length > 1
+  const riskTieredOptions = buildRiskTieredOptions(enriched, normalizedRiskProfile);
+  const aiSelection = !preferredOption && riskTieredOptions.length > 1
     ? await generateAiSelection({
         airport,
         connectionType,
@@ -568,7 +645,7 @@ async function buildLayoverPlan({
         riskProfile: normalizedRiskProfile,
         feasibility: bestFeasibleOption?.feasibility || null,
         summary: { processingMinutes, returnBufferMinutes, layoverMinutes },
-        candidates: feasibleShortlist,
+        candidates: riskTieredOptions,
       })
     : {
         provider: "fallback",
@@ -579,13 +656,14 @@ async function buildLayoverPlan({
         selectionRationale: null,
         riskExplainer: null,
         candidateBlurbs: {},
+        candidateProsConsByName: {},
         error: preferredOption
           ? "User explicitly selected a POI; AI selection skipped."
-          : "Not enough feasible candidates for AI selection.",
+          : "Not enough candidates for AI selection.",
       };
 
   const aiPickedOption = aiSelection.pickedCandidateName
-    ? feasibleShortlist.find(
+    ? riskTieredOptions.find(
         (item) => normalizePoiName(item.poi.name) === normalizePoiName(aiSelection.pickedCandidateName)
       ) || null
     : null;
@@ -593,7 +671,7 @@ async function buildLayoverPlan({
     logger.warn(
       {
         picked: aiSelection.pickedCandidateName,
-        candidates: feasibleShortlist.map((c) => c.poi.name),
+        candidates: riskTieredOptions.map((c) => c.poi.name),
       },
       "ai_selection_pick_mismatch"
     );
@@ -700,8 +778,24 @@ async function buildLayoverPlan({
       selectionRationale: aiSelection.selectionRationale,
       riskExplainer: aiSelection.riskExplainer,
       candidateBlurbs: aiSelection.candidateBlurbs || {},
+      candidateProsConsByName: aiSelection.candidateProsConsByName || {},
+      pickedCandidateName: aiSelection.pickedCandidateName || null,
       error: aiPlan.error || aiSelection.error,
     },
+    riskTieredOptions: riskTieredOptions.map((item) => ({
+      name: item.poi.name,
+      lat: item.poi.lat,
+      lon: item.poi.lon,
+      category: item.poi.category,
+      address: item.poi.address || "",
+      score: item.feasibility.score,
+      riskLabel: item.feasibility.riskLabel,
+      feasible: item.feasibility.feasible,
+      slackMinutes: item.feasibility.slackMinutes,
+      outboundMinutes: item.outboundMinutes,
+      inboundMinutes: item.inboundMinutes,
+      dwellMinutes: item.dwellMinutes,
+    })),
     explainability: {
       riskProfile: {
         key: normalizedRiskProfile,

@@ -632,6 +632,7 @@ app.post("/api/plan", async (req, res, next) => {
     };
 
     // Save to Vault if requested and user is authenticated
+    let vaultSave = null;
     if (req.body.saveToVault) {
       const authHeader = req.headers.authorization;
       const token = authHeader && authHeader.startsWith("Bearer ") ? authHeader.split(" ")[1] : null;
@@ -647,12 +648,22 @@ app.post("/api/plan", async (req, res, next) => {
           plan: planResult,
         });
         user.savedPlans = user.savedPlans.slice(0, 20);
+        vaultSave = { saved: true };
       } else {
         logger.warn(
           { hasToken: Boolean(token), tokenValid: Boolean(decoded) },
           "vault_save_skipped_unauthenticated"
         );
+        vaultSave = {
+          saved: false,
+          reason: token
+            ? "Your sign-in session has expired. Sign in again to save plans."
+            : "Sign in to save plans to your vault.",
+        };
       }
+    }
+    if (vaultSave) {
+      planResult.vaultSave = vaultSave;
     }
 
     return res.json(planResult);

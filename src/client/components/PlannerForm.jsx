@@ -1,116 +1,22 @@
 import React, { useState, useRef, useEffect } from "react";
 import Select from "react-select";
 import { useAuth } from "../hooks/useAuth";
-import { normalizeAirlineCode, normalizeFlightNumber, toDatetimeLocalValue } from "../utils";
-
-const SCENARIOS = {
-  "food-sfo": {
-    airportCode: "SFO",
-    connectionType: "domestic",
-    hoursAhead: 5,
-    riskProfile: "balanced",
-    strategyPack: "food-first",
-    interests: ["food", "shopping"],
-  },
-  "culture-jfk": {
-    airportCode: "JFK",
-    connectionType: "domestic",
-    hoursAhead: 6,
-    riskProfile: "balanced",
-    strategyPack: "culture-deep",
-    interests: ["culture", "sightseeing"],
-  },
-  "scenic-lax": {
-    airportCode: "LAX",
-    connectionType: "international",
-    hoursAhead: 8,
-    riskProfile: "conservative",
-    strategyPack: "scenic-balance",
-    interests: ["sightseeing", "food"],
-  },
-  "local-gems-lax": {
-    airportCode: "LAX",
-    connectionType: "domestic",
-    hoursAhead: 7,
-    riskProfile: "balanced",
-    strategyPack: "local-gems",
-    interests: ["food", "culture", "shopping"],
-  },
-  "museum-jfk": {
-    airportCode: "JFK",
-    connectionType: "international",
-    hoursAhead: 9,
-    riskProfile: "balanced",
-    strategyPack: "culture-deep",
-    interests: ["culture", "sightseeing"],
-  },
-  "recharge-sfo": {
-    airportCode: "SFO",
-    connectionType: "domestic",
-    hoursAhead: 4,
-    riskProfile: "conservative",
-    strategyPack: "recharge",
-    interests: ["food", "shopping"],
-  },
-};
-
-const SCENARIO_PRESENTATION = {
-  "food-sfo": {
-    icon: "🍜",
-    title: "Food Sprint",
-    summary: "Best for quick local dining and short-transfer confidence.",
-  },
-  "culture-jfk": {
-    icon: "🏛️",
-    title: "Culture Stop",
-    summary: "Best for a focused museum or landmark experience.",
-  },
-  "scenic-lax": {
-    icon: "🌊",
-    title: "Scenic Window",
-    summary: "Best for long windows with conservative safety buffers.",
-  },
-  "local-gems-lax": {
-    icon: "🗺️",
-    title: "Local Gems",
-    summary: "Great for varied nearby picks beyond one category.",
-  },
-  "museum-jfk": {
-    icon: "🖼️",
-    title: "Museum Arc",
-    summary: "Long-window cultural route with balanced caution.",
-  },
-  "recharge-sfo": {
-    icon: "☕",
-    title: "Quick Recharge",
-    summary: "Short, low-stress reset close to the airport.",
-  },
-};
-
-const STRATEGIES = [
-  { id: "standard", label: "Standard", desc: "Balanced mix of transit and exploration." },
-  { id: "food-first", label: "Food First", desc: "Prioritizes high-rated local dining." },
-  { id: "culture-deep", label: "Culture Deep Dive", desc: "Focuses on museums and landmarks." },
-  { id: "recharge", label: "Recharge Nearby", desc: "Low-stress options close to terminal." },
-  { id: "local-gems", label: "Local Gems", desc: "Increases category variety in alternatives." },
-  { id: "scenic-balance", label: "Scenic Balance", desc: "Adds scenic/culture variety with moderate travel range." },
-];
+import { toDatetimeLocalValue } from "../utils";
 
 const CONNECTION_OPTIONS = [
-  { id: "domestic", label: "Domestic" },
-  { id: "international", label: "International" },
+  { id: "domestic", label: "Domestic", hint: "No customs" },
+  { id: "international", label: "International", hint: "Customs adds time" },
 ];
 
 const RISK_OPTIONS = [
-  { id: "conservative", label: "Conservative" },
-  { id: "balanced", label: "Balanced" },
-  { id: "explorer", label: "Explorer" },
+  { id: "conservative", label: "Conservative", hint: "Play it safe" },
+  { id: "balanced", label: "Balanced", hint: "A good middle" },
+  { id: "explorer", label: "Explorer", hint: "Go for memorable" },
 ];
 
 export default function PlannerForm({ airports, interestsConfig, generatePlan, isLoading }) {
   const { user } = useAuth();
   const formRef = useRef(null);
-  const [strategyPack, setStrategyPack] = useState("standard");
   const [riskProfile, setRiskProfile] = useState("balanced");
   const [connectionType, setConnectionType] = useState("domestic");
   const [airportCode, setAirportCode] = useState("SFO");
@@ -120,25 +26,10 @@ export default function PlannerForm({ airports, interestsConfig, generatePlan, i
   const [formError, setFormError] = useState("");
   const [isAirportMenuOpen, setIsAirportMenuOpen] = useState(false);
 
-  const airportOptions = airports.map(a => ({
+  const airportOptions = airports.map((a) => ({
     value: a.code,
-    label: `${a.code} · ${a.name}`
+    label: `${a.code} · ${a.name}`,
   }));
-
-  const selectedScenarioKey =
-    Object.entries(SCENARIOS).find(([, scenario]) => {
-      const sameInterests =
-        scenario.interests.length === selectedInterests.length &&
-        scenario.interests.every((interest, index) => interest === selectedInterests[index]);
-
-      return (
-        scenario.airportCode === airportCode &&
-        scenario.connectionType === connectionType &&
-        scenario.riskProfile === riskProfile &&
-        scenario.strategyPack === strategyPack &&
-        sameInterests
-      );
-    })?.[0] || null;
 
   useEffect(() => {
     const now = new Date();
@@ -156,7 +47,6 @@ export default function PlannerForm({ airports, interestsConfig, generatePlan, i
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!formRef.current) return;
-    setFormError("");
 
     const formData = new FormData(formRef.current);
     const arrVal = formData.get("arrivalTime");
@@ -164,46 +54,41 @@ export default function PlannerForm({ airports, interestsConfig, generatePlan, i
     const arrDate = new Date(arrVal);
     const depDate = new Date(depVal);
 
-    if (depDate.getTime() <= arrDate.getTime()) {
-      setFormError("Departure time must be later than arrival time.");
+    if (Number.isNaN(arrDate.getTime()) || Number.isNaN(depDate.getTime())) {
+      setFormError("Please choose a valid arrival and departure time.");
       return;
     }
 
     if (selectedInterests.length === 0) {
-      setFormError("Select at least one interest so the itinerary can be personalized.");
+      setFormError("Pick at least one thing you're into.");
       return;
     }
 
+    if (depDate.getTime() <= arrDate.getTime()) {
+      setFormError("Your next flight has to leave after you arrive — please adjust the times.");
+      return;
+    }
+
+    const layoverMinutes = (depDate.getTime() - arrDate.getTime()) / 60000;
+    if (layoverMinutes < 45) {
+      setFormError("Layovers under 45 minutes aren't enough for a safe off-airport plan.");
+      return;
+    }
+
+    setFormError("");
+
     const payload = {
-      airportCode: airportCode,
+      airportCode,
       arrivalTime: arrVal,
       departureTime: depVal,
-      connectionType: connectionType,
-      riskProfile: riskProfile,
-      strategyPack: strategyPack,
+      connectionType,
+      riskProfile,
       interests: selectedInterests,
-      airlineCode: normalizeAirlineCode(formData.get("airlineCode")),
-      flightNumber: normalizeFlightNumber(formData.get("flightNumber")),
       trustAcknowledged: formData.get("trustAcknowledged") === "on",
       saveToVault: user ? formData.get("saveToVault") === "on" : false,
     };
 
     generatePlan(payload);
-  };
-
-  const applyScenario = (key) => {
-    const sc = SCENARIOS[key];
-    if (!sc) return;
-    setFormError("");
-    setAirportCode(sc.airportCode);
-    setConnectionType(sc.connectionType);
-    setRiskProfile(sc.riskProfile);
-    setStrategyPack(sc.strategyPack);
-    setSelectedInterests(sc.interests);
-    
-    const arrDate = new Date(arrivalTime || Date.now());
-    const later = new Date(arrDate.getTime() + sc.hoursAhead * 60 * 60 * 1000);
-    setDepartureTime(toDatetimeLocalValue(later));
   };
 
   const selectStyles = {
@@ -215,7 +100,7 @@ export default function PlannerForm({ airports, interestsConfig, generatePlan, i
       borderRadius: "12px",
       padding: "2px 4px",
       boxShadow: "none",
-      "&:hover": { borderColor: "var(--primary)" }
+      "&:hover": { borderColor: "var(--primary)" },
     }),
     menu: (base) => ({
       ...base,
@@ -223,94 +108,38 @@ export default function PlannerForm({ airports, interestsConfig, generatePlan, i
       border: "1px solid var(--border-color)",
       borderRadius: "12px",
       overflow: "hidden",
-      zIndex: 30
+      zIndex: 30,
     }),
     option: (base, { isFocused }) => ({
       ...base,
       background: isFocused ? "var(--bg-muted)" : "transparent",
       color: "var(--text-main)",
-      cursor: "pointer"
+      cursor: "pointer",
     }),
     singleValue: (base) => ({ ...base, color: "var(--text-main)" }),
-    input: (base) => ({ ...base, color: "var(--text-main)" })
+    input: (base) => ({ ...base, color: "var(--text-main)" }),
   };
 
   return (
     <aside className="card planner reveal">
       <form id="planner-form" className="form-card" ref={formRef} onSubmit={handleSubmit}>
-        <p className="eyebrow">Planner</p>
-        <h2>Build an itinerary</h2>
+        <h2 className="planner-title">Plan your layover</h2>
         <p className="planner-lead">
-          Pick your layover constraints, then choose a strategy style for a safer off-airport plan.
+          A few quick details and we'll build a safe, doable plan for your time on the ground.
         </p>
-        
-        <section className="quick-start-block">
-          <p className="mini-label">Quick Start Options</p>
-          <div className="scenario-grid">
-            {Object.keys(SCENARIOS).map((key) => (
-              <button
-                key={key}
-                type="button"
-                className={`scenario-btn ${selectedScenarioKey === key ? "active" : ""}`}
-                onClick={() => applyScenario(key)}
-              >
-                <strong>
-                  {SCENARIO_PRESENTATION[key]?.icon} {SCENARIO_PRESENTATION[key]?.title}
-                </strong>
-                <span>{SCENARIO_PRESENTATION[key]?.summary}</span>
-                <em>{SCENARIOS[key].airportCode} · +{SCENARIOS[key].hoursAhead}h</em>
-              </button>
-            ))}
-          </div>
-        </section>
 
-        <section className="form-section compact">
-          <span className="mini-label">Connection Type</span>
-          <div className="control-grid two-col">
-            {CONNECTION_OPTIONS.map((opt) => (
-              <button
-                key={opt.id}
-                type="button"
-                className={`control-btn ${connectionType === opt.id ? "active" : ""}`}
-                onClick={() => setConnectionType(opt.id)}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <section className="form-section compact">
-          <span className="mini-label">Risk Profile</span>
-          <div className="control-grid">
-            {RISK_OPTIONS.map((opt) => (
-              <button
-                key={opt.id}
-                type="button"
-                className={`control-btn ${riskProfile === opt.id ? "active" : ""}`}
-                onClick={() => setRiskProfile(opt.id)}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <section className="form-section compact">
-          <span className="mini-label">Layover Window</span>
-        </section>
-        <label>
-          <span>Arrival airport</span>
+        <section className="form-section">
+          <span className="mini-label">Where are you stopping?</span>
           <div className="airport-select-wrap">
-            <Select 
+            <Select
               options={airportOptions}
-              value={airportOptions.find(o => o.value === airportCode)}
+              value={airportOptions.find((o) => o.value === airportCode)}
               onChange={(opt) => {
                 setFormError("");
                 setAirportCode(opt.value);
               }}
               styles={selectStyles}
-              placeholder="Search airport code or name..."
+              placeholder="Search airport code or name…"
               menuPlacement="bottom"
               menuPosition="absolute"
               maxMenuHeight={220}
@@ -319,114 +148,121 @@ export default function PlannerForm({ airports, interestsConfig, generatePlan, i
             />
             <div className={`airport-menu-spacer ${isAirportMenuOpen ? "open" : ""}`} aria-hidden="true" />
           </div>
-        </label>
+        </section>
 
-        <div className="form-row">
-          <label>
-            <span>Arrival time</span>
-            <input
-              name="arrivalTime"
-              type="datetime-local"
-              required
-              value={arrivalTime}
-              onChange={(e) => {
-                setFormError("");
-                setArrivalTime(e.target.value);
-              }}
-            />
-          </label>
-          <label>
-            <span>Departure</span>
-            <input
-              name="departureTime"
-              type="datetime-local"
-              required
-              value={departureTime}
-              onChange={(e) => {
-                setFormError("");
-                setDepartureTime(e.target.value);
-              }}
-            />
-          </label>
+        <section className="form-section">
+          <span className="mini-label">When?</span>
+          <div className="form-row">
+            <label>
+              <span>Arriving</span>
+              <input
+                name="arrivalTime"
+                type="datetime-local"
+                required
+                value={arrivalTime}
+                onChange={(e) => {
+                  setFormError("");
+                  setArrivalTime(e.target.value);
+                }}
+              />
+            </label>
+            <label>
+              <span>Next flight</span>
+              <input
+                name="departureTime"
+                type="datetime-local"
+                required
+                value={departureTime}
+                onChange={(e) => {
+                  setFormError("");
+                  setDepartureTime(e.target.value);
+                }}
+              />
+            </label>
+          </div>
+        </section>
+
+        <section className="form-section">
+          <span className="mini-label">Type of connection</span>
+          <div className="control-grid two-col">
+            {CONNECTION_OPTIONS.map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                className={`control-btn with-hint ${connectionType === opt.id ? "active" : ""}`}
+                onClick={() => setConnectionType(opt.id)}
+              >
+                <strong>{opt.label}</strong>
+                <small>{opt.hint}</small>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="form-section">
+          <span className="mini-label">What sounds fun?</span>
+          <div className="interest-grid">
+            {Object.entries(interestsConfig).map(([key, cfg]) => (
+              <label
+                key={key}
+                className={`interest-chip ${selectedInterests.includes(key) ? "active" : ""}`}
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedInterests.includes(key)}
+                  onChange={() => {
+                    setFormError("");
+                    setSelectedInterests((prev) =>
+                      prev.includes(key) ? prev.filter((i) => i !== key) : [...prev, key]
+                    );
+                  }}
+                />
+                <span className="chip-label">{cfg.label}</span>
+              </label>
+            ))}
+          </div>
+        </section>
+
+        <section className="form-section">
+          <span className="mini-label">How adventurous?</span>
+          <div className="control-grid">
+            {RISK_OPTIONS.map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                className={`control-btn with-hint ${riskProfile === opt.id ? "active" : ""}`}
+                onClick={() => setRiskProfile(opt.id)}
+              >
+                <strong>{opt.label}</strong>
+                <small>{opt.hint}</small>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {formError && <p className="form-error">{formError}</p>}
+
+        <div className="action-row">
+          <button type="submit" id="submit-btn" disabled={isLoading} className="primary-btn">
+            <span>{isLoading ? "Building your plan…" : "Build my layover plan"}</span>
+          </button>
         </div>
 
-        <details className="accordion">
-          <summary className="accordion-trigger">Flight details & Personalization</summary>
-          <div className="accordion-body">
-            <div className="form-row">
-              <label>
-                <span>Airline</span>
-                <input name="airlineCode" type="text" maxLength="3" placeholder="AA" />
-              </label>
-              <label>
-                <span>Flight #</span>
-                <input name="flightNumber" type="text" maxLength="6" placeholder="1234" />
-              </label>
-            </div>
-            
-            <label>
-              <span>Strategy & Personality</span>
-              <div className="pack-grid mini">
-                {STRATEGIES.map(p => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    className={`pack-btn ${strategyPack === p.id ? 'active' : ''}`}
-                    onClick={() => setStrategyPack(p.id)}
-                  >
-                    <strong>{p.label}</strong>
-                    <small>{p.desc}</small>
-                  </button>
-                ))}
-              </div>
-            </label>
-
-            {/* Interests Section */}
-            <div className="form-section">
-              <span className="mini-label">Personalize Your Journey</span>
-              <p className="interest-helper">
-                {selectedInterests.length} interest{selectedInterests.length === 1 ? "" : "s"} selected
-              </p>
-              <div className="interest-grid">
-                {Object.entries(interestsConfig).map(([key, cfg]) => (
-                  <label key={key} className={`interest-chip ${selectedInterests.includes(key) ? 'active' : ''}`}>
-                    <input
-                      type="checkbox"
-                      checked={selectedInterests.includes(key)}
-                      onChange={() => {
-                        setFormError("");
-                        setSelectedInterests(prev => prev.includes(key) ? prev.filter(i => i !== key) : [...prev, key]);
-                      }}
-                    />
-                    <span className="chip-label">{cfg.label}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-          </div>
-        </details>
-
-        <section className="planner-submit-stack" aria-label="Plan actions">
-          {user && (
-            <label className="checkbox-row premium-feature">
-              <input name="saveToVault" type="checkbox" defaultChecked />
-              <span>💾 Save this plan to my Layover Vault</span>
-            </label>
-          )}
-
-          {formError && <p className="form-error">{formError}</p>}
-
-          <div className="action-row">
-            <button type="submit" id="submit-btn" disabled={isLoading} className="primary-btn">
-              <span>{isLoading ? "Generating..." : "Generate layover plan"}</span>
-            </button>
-          </div>
-          
+        {user ? (
           <label className="checkbox-row small">
-            <input name="trustAcknowledged" type="checkbox" required />
-            <span>I understand this tool gives guidance only.</span>
+            <input name="saveToVault" type="checkbox" defaultChecked />
+            <span>Save this plan to my vault for later</span>
           </label>
-        </section>
+        ) : (
+          <p className="vault-hint mono">
+            Sign in to save plans to your Layover Vault.
+          </p>
+        )}
+
+        <label className="checkbox-row tiny">
+          <input name="trustAcknowledged" type="checkbox" required />
+          <span>I understand this is guidance only — I'll keep an eye on my own flight.</span>
+        </label>
       </form>
     </aside>
   );

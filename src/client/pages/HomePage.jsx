@@ -27,8 +27,10 @@ export default function HomePage({ theme, onToggleTheme }) {
   const [isVaultOpen, setIsVaultOpen] = useState(false);
   const [pendingCandidateName, setPendingCandidateName] = useState(null);
   const [activeCandidateName, setActiveCandidateName] = useState(null);
+  const [vaultNotice, setVaultNotice] = useState(null);
   const latestRequestIdRef = useRef(0);
   const activePlanRequestRef = useRef(null);
+  const vaultNoticeTimerRef = useRef(null);
 
   useEffect(() => {
     let rafId;
@@ -44,6 +46,14 @@ export default function HomePage({ theme, onToggleTheme }) {
     return () => {
       window.removeEventListener("mousemove", handleMouseMove);
       cancelAnimationFrame(rafId);
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (vaultNoticeTimerRef.current) {
+        clearTimeout(vaultNoticeTimerRef.current);
+      }
     };
   }, []);
 
@@ -125,6 +135,15 @@ export default function HomePage({ theme, onToggleTheme }) {
       }
       if (latestRequestIdRef.current === requestId) {
         setCurrentPlan(data);
+        if (payload?.saveToVault && data?.vaultSave) {
+          if (vaultNoticeTimerRef.current) {
+            clearTimeout(vaultNoticeTimerRef.current);
+          }
+          setVaultNotice(data.vaultSave);
+          if (data.vaultSave.saved) {
+            vaultNoticeTimerRef.current = setTimeout(() => setVaultNotice(null), 4500);
+          }
+        }
         const selectedPoiName = data?.map?.selectedPoi?.name || null;
         const preferredMatched = data?.selection?.preferredMatchFound !== false;
         if (preferredPoiName) {
@@ -215,7 +234,13 @@ export default function HomePage({ theme, onToggleTheme }) {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }, []);
 
-  const { flightStatus, replanHistory } = useFlightStatus(currentPlan, generatePlan);
+  const {
+    flightStatus,
+    replanHistory,
+    pendingReplan,
+    applyPendingReplan,
+    dismissPendingReplan,
+  } = useFlightStatus(currentPlan, generatePlan);
 
   return (
     <>
@@ -237,97 +262,116 @@ export default function HomePage({ theme, onToggleTheme }) {
           showHomeAction={Boolean(currentPlan)}
         />
 
-        {/* --- Cinematic Hero Section --- */}
         {!currentPlan && (
           <section className="hero-section">
             <motion.div
-              className="hero-shell"
-              initial={{ opacity: 0, y: 30 }}
+              className="hero-shell hero-shell--simple"
+              initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 1.2, ease: [0.16, 1, 0.3, 1] }}
+              transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1] }}
             >
-              <div className="hero-copy">
-                <span className="eyebrow">Layover Decisioning Infrastructure</span>
-                <div className="hero-kicker-row">
-                  <span className="hero-kicker-pill">For loyalty, concierge, and travel platform teams</span>
-                  <span className="hero-kicker-note">Explainable off-airport guidance with traveler-facing output</span>
-                </div>
-                <h2 className="hero-title">
-                  Ship safer layover recommendations without building the <span className="text-gradient">ops layer</span> yourself.
-                </h2>
-                <p className="hero-subtitle">
-                  LayoverPlus turns a layover window into a scored stop recommendation, synced timeline,
-                  live route map, and place preview that a partner can actually launch.
-                </p>
-                <p className="hero-support-copy">
-                  Use the planner to simulate a real traveler window and inspect the exact product surface
-                  your customer, concierge agent, or loyalty app would present.
-                </p>
-                <div className="hero-actions-row">
-                  <a href="#planner-form" className="primary-btn hero-cta">
-                    Generate live itinerary
-                  </a>
-                  <div className="hero-inline-proof">
-                    <span className="hero-proof-pill">Explainable scoring</span>
-                    <span className="hero-proof-pill">White-label ready</span>
-                    <span className="hero-proof-pill">Map + preview sync</span>
-                  </div>
-                </div>
-                <div className="hero-stat-grid">
-                  <article className="hero-stat-card">
-                    <strong>Scored decisioning</strong>
-                    <span>Evaluates feasibility, travel margin, dwell value, and return safety in one flow.</span>
-                  </article>
-                  <article className="hero-stat-card">
-                    <strong>Synced user surface</strong>
-                    <span>Timeline, map, and place context stay aligned when a traveler changes stops.</span>
-                  </article>
-                  <article className="hero-stat-card">
-                    <strong>Partner deployment path</strong>
-                    <span>Fits loyalty apps, premium travel portals, concierge desks, and embedded APIs.</span>
-                  </article>
-                </div>
-              </div>
-
-              <div className="hero-proof-panel">
-                <p className="mini-label">Launch Surface Audit</p>
-                <div className="hero-proof-grid">
-                  <div className="hero-proof-card hero-proof-card-feature">
-                    <strong>What a buyer can demo immediately</strong>
-                    <ul className="hero-proof-list">
-                      <li>Safer alternatives ranked with explicit risk tradeoffs.</li>
-                      <li>Traveler-facing decision, timeline, map, and place preview in one flow.</li>
-                      <li>Fallback-safe guidance when off-airport travel should be avoided.</li>
-                    </ul>
-                  </div>
-                  <div className="hero-proof-card">
-                    <strong>Best first buyers</strong>
-                    <span>Premium travel portals, concierge teams, and OTA products with layover engagement goals.</span>
-                  </div>
-                  <div className="hero-proof-card">
-                    <strong>What still needs hardening</strong>
-                    <span>Operational observability, partner configuration, and production-grade data guarantees.</span>
-                  </div>
-                </div>
-                <div className="hero-proof-footer">
-                  <span className="hero-proof-flag">Explainable decisions</span>
-                  <span className="hero-proof-flag">Traveler-facing preview</span>
-                  <span className="hero-proof-flag">Partner packaging path</span>
-                </div>
-              </div>
+              <h1 className="hero-title">
+                Make the most of your <span className="text-gradient">layover</span>.
+              </h1>
+              <p className="hero-subtitle">
+                Tell us where you're stopping and when your next flight leaves — we'll plan
+                something safe and worth your time.
+              </p>
+              <a href="#planner-form" className="primary-btn hero-cta">
+                Start planning ↓
+              </a>
             </motion.div>
           </section>
+        )}
+
+        {pendingReplan && (
+          <motion.section
+            className="status-banner replan"
+            role="status"
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.28 }}
+          >
+            <div className="status-banner-body">
+              <p className="status-banner-title">Flight update detected</p>
+              <p className="status-banner-copy">
+                {pendingReplan.reason}
+                {Number.isFinite(pendingReplan.delayMinutes) && pendingReplan.delayMinutes > 0
+                  ? ` · ${pendingReplan.delayMinutes}m change`
+                  : ""}
+                . Want us to rebuild your plan with the new timing?
+              </p>
+            </div>
+            <div className="status-banner-actions">
+              <button
+                type="button"
+                className="primary-btn primary-btn--compact"
+                onClick={applyPendingReplan}
+                disabled={isLoading}
+              >
+                Rebuild plan
+              </button>
+              <button
+                type="button"
+                className="status-banner-dismiss"
+                onClick={dismissPendingReplan}
+                aria-label="Dismiss flight update"
+              >
+                ×
+              </button>
+            </div>
+          </motion.section>
+        )}
+
+        {vaultNotice && (
+          <motion.section
+            className={`status-banner ${vaultNotice.saved ? "info" : "warn"}`}
+            role="status"
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.28 }}
+          >
+            <div className="status-banner-body">
+              <p className="status-banner-title">
+                {vaultNotice.saved ? "Saved to vault" : "Not saved to vault"}
+              </p>
+              <p className="status-banner-copy">
+                {vaultNotice.saved
+                  ? "This plan is now in your Layover Vault."
+                  : vaultNotice.reason || "We couldn't save this plan to your vault."}
+              </p>
+            </div>
+            <button
+              type="button"
+              className="status-banner-dismiss"
+              onClick={() => setVaultNotice(null)}
+              aria-label="Dismiss vault notice"
+            >
+              ×
+            </button>
+          </motion.section>
         )}
 
         {error && (
           <motion.section
             className="status-banner error"
+            role="alert"
             initial={{ opacity: 0, y: -8 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.28 }}
           >
-            <p className="status-banner-title">Plan Request Failed</p>
-            <p className="status-banner-copy">{error}</p>
+            <div className="status-banner-body">
+              <p className="status-banner-title">Plan Request Failed</p>
+              <p className="status-banner-copy">{error}</p>
+            </div>
+            <button
+              type="button"
+              className="status-banner-dismiss"
+              onClick={() => setError(null)}
+              aria-label="Dismiss error"
+            >
+              ×
+            </button>
           </motion.section>
         )}
 
@@ -363,20 +407,13 @@ export default function HomePage({ theme, onToggleTheme }) {
 
       <AnimatePresence>
         {isVaultOpen && (
-          <LayoverVault 
-            isOpen={isVaultOpen} 
-            onClose={() => setIsVaultOpen(false)} 
-            onRestore={restorePlan} 
+          <LayoverVault
+            isOpen={isVaultOpen}
+            onClose={() => setIsVaultOpen(false)}
+            onRestore={restorePlan}
           />
         )}
       </AnimatePresence>
-
-      {error && (
-        <div className="error-toast card reveal">
-          <p>⚠️ {error}</p>
-          <button onClick={() => setError(null)}>Dismiss</button>
-        </div>
-      )}
     </>
   );
 }
